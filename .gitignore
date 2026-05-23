@@ -1,0 +1,20 @@
+# Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Secrets and local overrides (never commit)
+terraform.tfvars
+*.auto.tfvars
+.env
+.env.*
+
+# Generated kubeconfigs
+kubeconfigs/

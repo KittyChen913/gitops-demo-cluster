@@ -1,0 +1,11 @@
+# Copy to terraform.tfvars (gitignored) and adjust.
+
+region              = "ap-west"
+k8s_version         = "1.32"
+mgmt_node_type      = "g6-standard-2"
+mgmt_node_count     = 2
+worker_node_type    = "g6-standard-2"
+worker_node_count   = 2
+write_kubeconfig_files = true
+
+# linode_token = ""  # prefer: export LINODE_TOKEN="..."

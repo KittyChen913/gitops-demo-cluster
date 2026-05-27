@@ -8,7 +8,7 @@ variable "linode_token" {
 variable "region" {
   description = "Linode region for all prod clusters."
   type        = string
-  default     = "ap-west"
+  default     = "ap-south"
 }
 
 variable "k8s_version" {

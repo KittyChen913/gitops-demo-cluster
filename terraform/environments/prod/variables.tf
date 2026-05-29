@@ -46,3 +46,15 @@ variable "write_kubeconfig_files" {
   type        = bool
   default     = true
 }
+
+variable "aws_region" {
+  description = "AWS region for SSM Parameter Store."
+  type        = string
+  default     = "ap-southeast-1"
+}
+
+variable "write_ssm_parameters" {
+  description = "Push cluster CA certificates and API endpoints to AWS SSM Parameter Store."
+  type        = bool
+  default     = true
+}

@@ -10,11 +10,17 @@ terraform {
       source  = "hashicorp/local"
       version = "~> 2.5"
     }
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
   }
-
-  # Remote state: copy backend.tf.example → backend.tf and configure before init.
 }
 
 provider "linode" {
   token = var.linode_token != "" ? var.linode_token : null
+}
+
+provider "aws" {
+  region = var.aws_region
 }

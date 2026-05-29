@@ -12,5 +12,6 @@ locals {
     # }
   }
 
-  kubeconfig_root = abspath("${path.module}/../../../kubeconfigs/${local.environment}")
+  kubeconfig_root  = abspath("${path.module}/../../../kubeconfigs/${local.environment}")
+  ssm_path_prefix  = "/gitops/${local.environment}/clusters"
 }

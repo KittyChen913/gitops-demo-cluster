@@ -35,11 +35,16 @@ resource "kubernetes_cluster_role_v1" "argocd_mgmt" {
   rule {
     api_groups = ["rbac.authorization.k8s.io"]
     resources  = ["clusterroles", "clusterrolebindings", "roles", "rolebindings"]
-    verbs      = ["create", "delete", "patch", "update"]
+    verbs      = ["create", "delete", "patch", "update", "escalate", "bind"]
   }
   rule {
     api_groups = ["apiextensions.k8s.io"]
     resources  = ["customresourcedefinitions"]
+    verbs      = ["create", "delete", "patch", "update"]
+  }
+  rule {
+    api_groups = ["networking.k8s.io"]
+    resources  = ["networkpolicies", "ingresses", "ingressclasses"]
     verbs      = ["create", "delete", "patch", "update"]
   }
 }
@@ -117,11 +122,16 @@ resource "kubernetes_cluster_role_v1" "argocd_ateam" {
   rule {
     api_groups = ["rbac.authorization.k8s.io"]
     resources  = ["clusterroles", "clusterrolebindings", "roles", "rolebindings"]
-    verbs      = ["create", "delete", "patch", "update"]
+    verbs      = ["create", "delete", "patch", "update", "escalate", "bind"]
   }
   rule {
     api_groups = ["apiextensions.k8s.io"]
     resources  = ["customresourcedefinitions"]
+    verbs      = ["create", "delete", "patch", "update"]
+  }
+  rule {
+    api_groups = ["networking.k8s.io"]
+    resources  = ["networkpolicies", "ingresses", "ingressclasses"]
     verbs      = ["create", "delete", "patch", "update"]
   }
 }

@@ -47,6 +47,11 @@ resource "kubernetes_cluster_role_v1" "argocd_mgmt" {
     resources  = ["networkpolicies", "ingresses", "ingressclasses"]
     verbs      = ["create", "delete", "patch", "update"]
   }
+  rule {
+    api_groups = ["argoproj.io"]
+    resources  = ["applications", "applicationsets", "appprojects"]
+    verbs      = ["create", "delete", "patch", "update"]
+  }
 }
 
 resource "kubernetes_service_account_v1" "argocd_mgmt" {
@@ -132,6 +137,11 @@ resource "kubernetes_cluster_role_v1" "argocd_ateam" {
   rule {
     api_groups = ["networking.k8s.io"]
     resources  = ["networkpolicies", "ingresses", "ingressclasses"]
+    verbs      = ["create", "delete", "patch", "update"]
+  }
+  rule {
+    api_groups = ["argoproj.io"]
+    resources  = ["applications", "applicationsets", "appprojects"]
     verbs      = ["create", "delete", "patch", "update"]
   }
 }

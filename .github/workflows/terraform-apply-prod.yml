@@ -140,6 +140,7 @@ jobs:
     name: "Bootstrap S3 Backend [prod]"
     needs: preflight
     uses: ./.github/workflows/_bootstrap-backend.yml
+    secrets: inherit
     with:
       environment: prod
 
@@ -149,6 +150,7 @@ jobs:
     name: "Phase 1 — Apply Clusters [prod]"
     needs: [preflight, bootstrap-backend]
     uses: ./.github/workflows/_tf-apply.yml
+    secrets: inherit
     with:
       environment: prod
       tf_dir: "terraform/environments/prod"
@@ -160,6 +162,7 @@ jobs:
     name: "Phase 2 — Apply K8s SA/RBAC [prod]"
     needs: [preflight, apply-clusters]
     uses: ./.github/workflows/_tf-apply.yml
+    secrets: inherit
     with:
       environment: prod
       tf_dir: "terraform/environments/prod-k8s"

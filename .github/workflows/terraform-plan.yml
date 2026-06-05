@@ -27,6 +27,8 @@ on:
       - master
     paths:
       - "terraform/**"
+      - ".github/workflows/terraform-plan.yml"
+      - ".github/workflows/_tf-plan.yml"
 
   # 允許手動執行 plan
   workflow_dispatch:

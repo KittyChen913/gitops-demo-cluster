@@ -1,0 +1,184 @@
+# =============================================================================
+# terraform-apply-dev.yml — Terraform Apply 主流程（dev）
+# =============================================================================
+#
+# ⚠️  dev 環境 Pipeline — 生產由 terraform-apply-prod.yml 管理
+#
+# dev 基礎設施佈建入口。
+# 出於安全考量封鎖於 dev，防止意外部署至生產。
+#
+# 觸發條件：
+#   - push 到 master（paths: terraform/**）→ 自動 apply dev
+#     注意：paths: terraform/** 已排除僅文件變更
+#     （*.md, README.md, docs/**）— 不需額外 paths-ignore。
+#   - workflow_dispatch → 手動觸發（僅 dev）
+#
+# 生產部署請使用 terraform-apply-prod.yml：
+#   - 僅在 semantic version tag（v*）觸發
+#   - 強制 GitHub Environment "prod" 手動批准門戳
+#   - 不會因 branch push 自動 apply
+#
+# 執行順序：
+#   ┌─────────────────────────────────────────────────────────────────┐
+#   │  [Bootstrap] bootstrap-backend                                  │
+#   │  AWS S3 bucket（版本控制 + 加密 + 封鎖公開存取）              │
+#   ├─────────────────────────────────────────────────────────────────┤
+#   │  [Phase 1] apply-clusters                                       │
+#   │  terraform/environments/dev → 建立 LKE cluster              │
+#   │  寫入: SSM api-endpoint, ca-cert                              │
+#   ├─────────────────────────────────────────────────────────────────┤
+#   │  [Phase 2] apply-k8s          （needs: apply-clusters）          │
+#   │  terraform/environments/dev-k8s → ArgoCD SA/RBAC/Token         │
+#   │  讀取: 由 S3 bridge 下載的 Phase 1 state                  │
+#   │  寫入: SSM token（SecureString）                               │
+#   ├─────────────────────────────────────────────────────────────────┤
+#   │  [Post-Provision] cluster-post-provision.yml（workflow_call）    │
+#   │  統籌: 健康檢查 → SA/RBAC 驗證 → 就緒檢查               │
+#   └─────────────────────────────────────────────────────────────────┘
+#
+# 環境保護：
+#   dev — 不需批准，push 到 master 自動 apply
+#
+# Concurrency：
+#   同時只允許一個 dev apply。新的執行會排隊而非取消。
+# =============================================================================
+
+name: "Terraform Apply — Dev"
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - "terraform/**"
+
+  # NOTE: workflow_dispatch 的生產觸發由 terraform-apply-prod.yml 處理
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment (dev only — use terraform-apply-prod.yml for prod)"
+        type: choice
+        options: [dev]
+        required: true
+        default: "dev"
+      skip_post_provision:
+        description: "Skip post-provision validation (use with caution)"
+        type: boolean
+        default: false
+
+# 不允許並行的 dev apply。
+# 生產使用 terraform-apply-prod.yml 中獨立的 concurrency group。
+concurrency:
+  group: tf-apply-dev
+  cancel-in-progress: false
+
+env:
+  # 此 pipeline 僅限 dev。TARGET_ENV 始終為 "dev"。
+  # 生產部署一律由 terraform-apply-prod.yml 處理。
+  TARGET_ENV: dev
+
+jobs:
+  # ── Pre-flight: validate required secrets are configured ──────────────────
+  preflight:
+    name: "Pre-flight Check [dev]"
+    runs-on: ubuntu-latest
+    outputs:
+      target_env: ${{ steps.set-env.outputs.target_env }}
+    steps:
+      - name: Resolve target environment
+        id: set-env
+        run: |
+          TARGET="dev"
+          echo "target_env=${TARGET}" >> "$GITHUB_OUTPUT"
+          echo "Target environment: ${TARGET}"
+
+      - name: Validate OIDC prerequisites
+        env:
+          AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+        run: |
+          if [ -z "${AWS_ACCOUNT_ID}" ]; then
+            echo "::error title=Missing Variable::AWS_ACCOUNT_ID repository variable is not configured"
+            echo "See README.md → CI/CD Configuration"
+            exit 1
+          fi
+          echo "AWS Account ID configured ✓"
+
+  # ── Bootstrap：確保 S3 bucket 存在 ─────────────────────────────────────────
+  bootstrap-backend:
+    name: "Bootstrap S3 Backend [dev]"
+    needs: preflight
+    uses: ./.github/workflows/_bootstrap-backend.yml
+    with:
+      environment: ${{ needs.preflight.outputs.target_env }}
+
+  # ── Phase 1：建立 LKE Cluster ───────────────────────────────────────────────
+  apply-clusters:
+    name: "Phase 1 — Apply Clusters [${{ needs.preflight.outputs.target_env }}]"
+    needs: [preflight, bootstrap-backend]
+    uses: ./.github/workflows/_tf-apply.yml
+    with:
+      environment: ${{ needs.preflight.outputs.target_env }}
+      tf_dir: "terraform/environments/${{ needs.preflight.outputs.target_env }}"
+      plan_key: "${{ needs.preflight.outputs.target_env }}-clusters"
+
+  # ── Phase 2：ArgoCD SA / RBAC / Token ──────────────────────────────────────────────
+  apply-k8s:
+    name: "Phase 2 — Apply K8s SA/RBAC [${{ needs.preflight.outputs.target_env }}]"
+    needs: [preflight, apply-clusters]
+    uses: ./.github/workflows/_tf-apply.yml
+    with:
+      environment: ${{ needs.preflight.outputs.target_env }}
+      tf_dir: "terraform/environments/${{ needs.preflight.outputs.target_env }}-k8s"
+      plan_key: "${{ needs.preflight.outputs.target_env }}-k8s"
+
+  # ── Post-Provision：健康 + SA/RBAC + 就緒驗證 ────────────────────────────────────────
+  post-provision:
+    name: "Post-Provision Validation [${{ needs.preflight.outputs.target_env }}]"
+    needs: [preflight, apply-k8s]
+    if: |
+      needs.apply-k8s.result == 'success' &&
+      (github.event_name != 'workflow_dispatch' || inputs.skip_post_provision != true)
+    uses: ./.github/workflows/cluster-post-provision.yml
+    with:
+      environment: ${{ needs.preflight.outputs.target_env }}
+
+  # ── Final Pipeline Summary ────────────────────────────────────────────────────
+  pipeline-summary:
+    name: "Pipeline Summary"
+    runs-on: ubuntu-latest
+    needs: [preflight, bootstrap-backend, apply-clusters, apply-k8s, post-provision]
+    if: always()
+    steps:
+      - name: Generate Pipeline Summary
+        run: |
+          TARGET="${{ needs.preflight.outputs.target_env }}"
+          {
+            echo "# GitOps Cluster Pipeline Summary"
+            echo ""
+            echo "**Environment:** \`${TARGET}\`  "
+            echo "**Triggered by:** @${{ github.actor }}  "
+            echo "**Commit:** \`${{ github.sha }}\`  "
+            echo "**Run:** [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+            echo ""
+            echo "## Job Results"
+            echo ""
+            echo "| Stage | Job | Status |"
+            echo "|-------|-----|--------|"
+            echo "| Pre-flight | Validate OIDC prerequisites | ${{ needs.preflight.result }} |"
+            echo "| Bootstrap | S3 bucket (native locking) | ${{ needs.bootstrap-backend.result }} |"
+            echo "| Phase 1 | Apply clusters | ${{ needs.apply-clusters.result }} |"
+            echo "| Phase 2 | Apply k8s SA/RBAC | ${{ needs.apply-k8s.result }} |"
+            echo "| Validation | Post-provision | ${{ needs.post-provision.result }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Set pipeline result
+        env:
+          CLUSTER_RESULT: ${{ needs.apply-clusters.result }}
+          K8S_RESULT:     ${{ needs.apply-k8s.result }}
+        run: |
+          if [ "${CLUSTER_RESULT}" != "success" ] || [ "${K8S_RESULT}" != "success" ]; then
+            echo "::error::Pipeline failed — infrastructure may be in partial state"
+            echo "Check logs and re-run after reviewing the terraform state."
+            exit 1
+          fi
+          echo "Pipeline completed successfully ✓"

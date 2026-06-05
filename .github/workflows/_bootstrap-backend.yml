@@ -1,0 +1,93 @@
+# =============================================================================
+# _bootstrap-backend.yml — 可重用 S3 Backend 初始化
+# =============================================================================
+# 呼叫者: terraform-apply-dev.yml, terraform-apply-prod.yml
+#
+# 執行內容（所有操作皆為冪等，可安全重複執行）：
+#   1. 從 terraform/environments/dev/backend.hcl 讀取 S3 bucket 名稱
+#   2. 檢查 S3 bucket 是否已存在：存在 → 跳過；不存在 → init → apply
+#
+# 安全性：
+#   - Bucket 為私有（完全封鎖公開存取）
+#   - 靜態加密（AES-256）
+#   - 版本控制可恢復 state 檔案
+#   - 原生 S3 鎖定（use_lockfile=true）— 需要 Terraform >= 1.10
+# =============================================================================
+
+name: "[Reusable] Bootstrap S3 Backend"
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "Target environment (dev | prod) — used for logging only"
+        type: string
+        required: true
+
+jobs:
+  bootstrap:
+    name: "Bootstrap S3 Backend [${{ inputs.environment }}]"
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "~1.10"
+          terraform_wrapper: false
+
+      - name: Configure AWS Credentials
+        uses: ./.github/actions/configure-aws-credentials
+        with:
+          aws-account-id: ${{ vars.AWS_ACCOUNT_ID }}
+          aws-region: ap-southeast-1
+
+      - name: Read tf_state_bucket
+        run: |
+          BUCKET=$(grep 'bucket' terraform/environments/dev/backend.hcl \
+            | sed 's/.*=\s*"\(.*\)".*/\1/')
+          echo "TF_STATE_BUCKET=${BUCKET}" >> "$GITHUB_ENV"
+
+      - name: Check Bucket Exists
+        id: check-bucket
+        run: |
+          if aws s3api head-bucket --bucket "${TF_STATE_BUCKET}" 2>/dev/null; then
+            echo "Bucket ${TF_STATE_BUCKET} already exists — skipping creation"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Bucket ${TF_STATE_BUCKET} does not exist — will create"
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Terraform Init
+        if: steps.check-bucket.outputs.exists == 'false'
+        working-directory: terraform/environments/bootstrap
+        run: terraform init -reconfigure -input=false
+
+      - name: Terraform Apply
+        if: steps.check-bucket.outputs.exists == 'false'
+        working-directory: terraform/environments/bootstrap
+        run: |
+          terraform apply \
+            -auto-approve \
+            -input=false
+
+      - name: Post Bootstrap Summary
+        if: always()
+        run: |
+          {
+            echo "## S3 Backend Bootstrap: \`${{ inputs.environment }}\`"
+            echo ""
+            echo "| Resource | Name | Region |"
+            echo "|----------|------|---------|"
+            echo "| S3 Bucket | \`${TF_STATE_BUCKET}\` | \`ap-southeast-1\` |"
+            echo "| State Locking | S3 native (use_lockfile=true) | — |"
+            echo "| Action | ${{ steps.check-bucket.outputs.exists == 'true' && 'Already existed — skipped' || 'Created' }} | — |"
+          } >> "$GITHUB_STEP_SUMMARY"

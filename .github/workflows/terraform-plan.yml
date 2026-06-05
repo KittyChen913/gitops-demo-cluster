@@ -1,0 +1,202 @@
+# =============================================================================
+# terraform-plan.yml — Terraform Plan 主流程（PR gate check）
+# =============================================================================
+#
+# 對所有觸及 terraform/ 文件的 Pull Request 觸發。
+# 對所有受影響的環境執行 terraform plan。
+# 結果會發佈為 PR step summary 與註解。
+#
+# 執行矩陣：
+#   dev/clusters  — terraform/environments/dev/**
+#   dev/k8s       — terraform/environments/dev-k8s/**
+#   prod/clusters — terraform/environments/prod/**
+#   prod/k8s      — terraform/environments/prod-k8s/**
+#
+# 模組變更（terraform/modules/**）會觸發全部四個 plan。
+#
+# PR 永遠不會觸發 terraform apply。
+#
+# 僅 terraform/ 內的變更觸發 plan；文件類（md、docs/）不觸發。
+# =============================================================================
+
+name: "Terraform Plan"
+
+on:
+  pull_request:
+    branches:
+      - master
+    paths:
+      - "terraform/**"
+
+  # 允許手動執行 plan
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to plan (leave empty to plan all)"
+        type: choice
+        options: ["", "dev", "prod"]
+        default: ""
+
+# 避免同一個 PR 被重複執行 Terraform Plan
+concurrency:
+  group: tf-plan-pr-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  # ── 偵測哪些環境發生變更 ──────────────────────────────────────────────
+  detect-changes:
+    name: "Detect Changed Environments"
+    runs-on: ubuntu-latest
+    outputs:
+      dev_clusters: ${{ steps.filter.outputs.dev_clusters }}
+      dev_k8s:      ${{ steps.filter.outputs.dev_k8s }}
+      prod_clusters: ${{ steps.filter.outputs.prod_clusters }}
+      prod_k8s:     ${{ steps.filter.outputs.prod_k8s }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed Terraform paths
+        id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          ENV_INPUT:  ${{ inputs.environment }}
+          BASE_SHA:   ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA:   ${{ github.event.pull_request.head.sha }}
+        run: |
+          # 以 PR base..HEAD 作為比較基準；workflow_dispatch 則執行全部
+          if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
+            DEV_RUN=false
+            PROD_RUN=false
+            if [ -z "${ENV_INPUT}" ] || [ "${ENV_INPUT}" = "dev" ];  then DEV_RUN=true;  fi
+            if [ -z "${ENV_INPUT}" ] || [ "${ENV_INPUT}" = "prod" ]; then PROD_RUN=true; fi
+            {
+              echo "dev_clusters=${DEV_RUN}"
+              echo "dev_k8s=${DEV_RUN}"
+              echo "prod_clusters=${PROD_RUN}"
+              echo "prod_k8s=${PROD_RUN}"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          BASE_REF="${BASE_SHA}"
+          HEAD_REF="${HEAD_SHA}"
+          CHANGED=$(git diff --name-only "${BASE_REF}...${HEAD_REF}" 2>/dev/null || \
+                    git diff --name-only HEAD~1 HEAD)
+
+          echo "Changed files:"
+          echo "${CHANGED}"
+
+          # 模組變更影響全部環境
+          MODULES_CHANGED=false
+          if echo "${CHANGED}" | grep -q "^terraform/modules/"; then
+            MODULES_CHANGED=true
+            echo "偵測到模組變更 — 將執行全部環境 plan"
+          fi
+
+          check_path() {
+            local path_pattern="$1"
+            if [ "${MODULES_CHANGED}" = "true" ]; then
+              echo "true"
+            elif echo "${CHANGED}" | grep -q "^${path_pattern}"; then
+              echo "true"
+            else
+              echo "false"
+            fi
+          }
+
+          {
+            echo "dev_clusters=$(check_path 'terraform/environments/dev/')"
+            echo "dev_k8s=$(check_path 'terraform/environments/dev-k8s/')"
+            echo "prod_clusters=$(check_path 'terraform/environments/prod/')"
+            echo "prod_k8s=$(check_path 'terraform/environments/prod-k8s/')"
+          } >> "$GITHUB_OUTPUT"
+
+  # ── Plan: dev/clusters ───────────────────────────────────────────────────────
+  plan-dev-clusters:
+    name: "Plan [dev/clusters]"
+    needs: detect-changes
+    if: needs.detect-changes.outputs.dev_clusters == 'true'
+    uses: ./.github/workflows/_tf-plan.yml
+    with:
+      environment: "dev"
+      tf_dir: "terraform/environments/dev"
+      plan_key: "dev-clusters"
+
+  # ── Plan: dev-k8s ────────────────────────────────────────────────────────────
+  plan-dev-k8s:
+    name: "Plan [dev/k8s]"
+    needs: detect-changes
+    if: needs.detect-changes.outputs.dev_k8s == 'true'
+    uses: ./.github/workflows/_tf-plan.yml
+    with:
+      environment: "dev"
+      tf_dir: "terraform/environments/dev-k8s"
+      plan_key: "dev-k8s"
+
+  # ── Plan: prod/clusters ──────────────────────────────────────────────────────
+  plan-prod-clusters:
+    name: "Plan [prod/clusters]"
+    needs: detect-changes
+    if: needs.detect-changes.outputs.prod_clusters == 'true'
+    uses: ./.github/workflows/_tf-plan.yml
+    with:
+      environment: "prod"
+      tf_dir: "terraform/environments/prod"
+      plan_key: "prod-clusters"
+
+  # ── Plan: prod-k8s ───────────────────────────────────────────────────────────
+  plan-prod-k8s:
+    name: "Plan [prod/k8s]"
+    needs: detect-changes
+    if: needs.detect-changes.outputs.prod_k8s == 'true'
+    uses: ./.github/workflows/_tf-plan.yml
+    with:
+      environment: "prod"
+      tf_dir: "terraform/environments/prod-k8s"
+      plan_key: "prod-k8s"
+
+  # ── PR 狀態門戳 ───────────────────────────────────────────────────────────────────────
+  # 必要狀態檢查：所有已完成的 plan 必須成功。
+  plan-gate:
+    name: "Plan Gate (all envs)"
+    runs-on: ubuntu-latest
+    needs: [plan-dev-clusters, plan-dev-k8s, plan-prod-clusters, plan-prod-k8s]
+    if: always()
+    steps:
+      - name: Evaluate plan results
+        run: |
+          RESULTS=(
+            "${{ needs.plan-dev-clusters.result }}"
+            "${{ needs.plan-dev-k8s.result }}"
+            "${{ needs.plan-prod-clusters.result }}"
+            "${{ needs.plan-prod-k8s.result }}"
+          )
+
+          FAILED=0
+          for RESULT in "${RESULTS[@]}"; do
+            if [ "${RESULT}" = "failure" ] || [ "${RESULT}" = "cancelled" ]; then
+              FAILED=$((FAILED + 1))
+            fi
+          done
+
+          {
+            echo "## Plan Gate Summary"
+            echo ""
+            echo "| Plan | Result |"
+            echo "|------|--------|"
+            echo "| dev/clusters  | ${{ needs.plan-dev-clusters.result }} |"
+            echo "| dev/k8s       | ${{ needs.plan-dev-k8s.result }} |"
+            echo "| prod/clusters | ${{ needs.plan-prod-clusters.result }} |"
+            echo "| prod/k8s      | ${{ needs.plan-prod-k8s.result }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "${FAILED}" -gt "0" ]; then
+            echo "::error::${FAILED} plan(s) failed or were cancelled — PR cannot be merged"
+            exit 1
+          fi
+
+          echo "All plans passed ✓"

@@ -1,0 +1,173 @@
+# =============================================================================
+# cluster-health-check.yml — 獨立 Cluster 健康檢查
+# =============================================================================
+#
+# 手動或排程執行 cluster 存活監控。
+# 對一個環境中所有 cluster 執行 check-cluster-health.sh。
+#
+# 與完整 post-provision pipeline 不同，此工作流程：
+#   - 僅執行健康檢查（不驗證 SA/RBAC，不匯出 S3）
+#   - 可指定對象為特定 cluster 或環境內所有 cluster
+#   - 可排程執行以定期監控
+#
+# 觸發條件：
+#   - workflow_dispatch（手動）
+#   - schedule（每日 UTC 06:00）
+#   - workflow_call（由其他工作流程呼叫，用於快速健康驗證）
+#
+# 僅文件變更行為：
+#   schedule 與 workflow_call/workflow_dispatch 不評估文件路徑 —
+#   僅文件提交永遠不會觸發此工作流程。
+# =============================================================================
+
+name: "Cluster Health Check"
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        type: choice
+        options: [dev, prod]
+        required: true
+        default: "dev"
+      cluster_label:
+        description: "Specific cluster label (empty = check all clusters)"
+        type: string
+        default: ""
+
+  schedule:
+    # 每日 UTC 06:00 執行健康檢查
+    - cron: "0 6 * * *"
+
+  workflow_call:
+    inputs:
+      environment:
+        description: "Target environment (dev | prod)"
+        type: string
+        required: true
+      cluster_label:
+        description: "Specific cluster label (empty = check all)"
+        type: string
+        default: ""
+    outputs:
+      health_result:
+        description: "Health check result (success | failure)"
+        value: ${{ jobs.health-check.outputs.result }}
+
+jobs:
+  health-check:
+    name: "Health Check [${{ inputs.environment || 'dev' }}]"
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+      contents: read
+
+    # 排程執行時對象為 dev（如需改為 prod 或加入 matrix 請自行修改）
+    env:
+      CHECK_ENV: ${{ inputs.environment || 'dev' }}
+
+    outputs:
+      result: ${{ steps.evaluate.outputs.result }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Configure AWS Credentials
+        uses: ./.github/actions/configure-aws-credentials
+        with:
+          aws-account-id: ${{ vars.AWS_ACCOUNT_ID }}
+          aws-region: ap-southeast-1
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v5
+        with:
+          version: "v1.29.0"
+
+      - name: Discover and check clusters
+        id: check
+        env:
+          SPECIFIC_LABEL_INPUT: ${{ inputs.cluster_label }}
+          AWS_REGION: ap-southeast-1
+        run: |
+          chmod +x scripts/check-cluster-health.sh
+
+          SPECIFIC_LABEL="${SPECIFIC_LABEL_INPUT}"
+          SSM_PREFIX="/gitops/${CHECK_ENV}/clusters"
+
+          if [ -n "${SPECIFIC_LABEL}" ]; then
+            LABELS="${SPECIFIC_LABEL}"
+          else
+            echo "Discovering clusters from SSM path: ${SSM_PREFIX}..."
+            LABELS=$(aws ssm get-parameters-by-path \
+              --path "${SSM_PREFIX}" \
+              --region "${AWS_REGION}" \
+              --recursive \
+              --query "Parameters[?ends_with(Name, '/api-endpoint')].Name" \
+              --output text \
+              | tr '\t' '\n' \
+              | sed "s|${SSM_PREFIX}/||" \
+              | sed 's|/api-endpoint||' \
+              | tr '\n' ' ' \
+              | xargs)
+          fi
+
+          if [ -z "${LABELS}" ]; then
+            echo "::error::No clusters found for environment ${CHECK_ENV}"
+            exit 1
+          fi
+
+          echo "Clusters to check: ${LABELS}"
+          FAILED=0
+          CHECKED=0
+
+          for LABEL in ${LABELS}; do
+            echo "::group::Health Check — ${LABEL}"
+            if CLUSTER_ENV="${CHECK_ENV}" \
+               CLUSTER_LABEL="${LABEL}" \
+               bash scripts/check-cluster-health.sh; then
+              CHECKED=$((CHECKED + 1))
+              echo "::endgroup::"
+            else
+              FAILED=$((FAILED + 1))
+              echo "::endgroup::"
+              echo "::error title=Unhealthy::${LABEL} failed health check"
+            fi
+          done
+
+          echo "checked=${CHECKED}" >> "$GITHUB_OUTPUT"
+          echo "failed=${FAILED}"   >> "$GITHUB_OUTPUT"
+          echo "labels=${LABELS}"   >> "$GITHUB_OUTPUT"
+
+          if [ "${FAILED}" -gt "0" ]; then
+            exit 1
+          fi
+
+      - name: Evaluate result
+        id: evaluate
+        if: always()
+        env:
+          CHECK_CONCLUSION: ${{ steps.check.conclusion }}
+        run: |
+          if [ "${CHECK_CONCLUSION}" = "success" ]; then
+            echo "result=success" >> "$GITHUB_OUTPUT"
+          else
+            echo "result=failure" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Post Health Check Summary
+        if: always()
+        run: |
+          {
+            echo "## Cluster Health Check: \`${CHECK_ENV}\`"
+            echo ""
+            echo "| Field | Value |"
+            echo "|-------|-------|"
+            echo "| Environment | \`${CHECK_ENV}\` |"
+            echo "| Clusters checked | ${{ steps.check.outputs.checked || '0' }} |"
+            echo "| Failures | ${{ steps.check.outputs.failed || 'N/A' }} |"
+            echo "| Result | ${{ steps.evaluate.outputs.result }} |"
+            echo "| Triggered by | ${{ github.event_name }} |"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,157 @@
+# =============================================================================
+# _tf-apply.yml — 可重用 Terraform Apply
+# =============================================================================
+# 呼叫者: terraform-apply-dev.yml
+#
+# 執行內容：
+#   1. 動態配置 S3 backend
+#   2. Phase 2 時：下載 Phase 1 state bridge
+#   3. terraform init → plan → apply（自動批准）
+#   4. 輸出 apply 後摘要
+#
+# 生產環境需在 GitHub 儲存庫設定中為 "prod" Environment 配置必要審閱者。
+# Job 執行于 environment: ${{ inputs.environment }}，自動強制進行批准流程。
+#
+# 安全性：
+#   - TF_VAR_write_kubeconfig_files=false 防止 kubeconfig 寫入磁碟
+#   - 所有輸出已過濾 token/secret/password 模式
+#   - Concurrency group 防止相同環境同時 apply
+# =============================================================================
+
+name: "[Reusable] Terraform Apply"
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "Target environment (dev | prod)"
+        type: string
+        required: true
+      tf_dir:
+        description: "Relative path to Terraform working directory"
+        type: string
+        required: true
+      plan_key:
+        description: "Unique key suffix matching the plan artifact (e.g., dev-clusters)"
+        type: string
+        required: true
+    outputs:
+      apply_outcome:
+        description: "Outcome of the apply step (success | failure)"
+        value: ${{ jobs.apply.outputs.apply_outcome }}
+
+jobs:
+  apply:
+    name: "tf apply [${{ inputs.plan_key }}]"
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+      contents: read
+
+    # GitHub Environment: "prod" 需要審閱者批准。
+    # "dev" 沒有保護規則—自動執行。
+    environment: ${{ inputs.environment }}
+
+    # 防止相同環境/階段同時 apply。
+    # cancel-in-progress: false 確保排隊中的 apply 不會被中斷。
+    concurrency:
+      group: tf-apply-${{ inputs.plan_key }}
+      cancel-in-progress: false
+
+    outputs:
+      apply_outcome: ${{ steps.apply.outcome }}
+
+    defaults:
+      run:
+        working-directory: ${{ inputs.tf_dir }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "~1.10"
+          terraform_wrapper: false
+
+      - name: Configure AWS Credentials
+        uses: ./.github/actions/configure-aws-credentials
+        with:
+          aws-account-id: ${{ vars.AWS_ACCOUNT_ID }}
+          aws-region: ap-southeast-1
+
+      - name: Fetch SSM Parameters
+        uses: ./.github/actions/get-ssm-parameters
+        with:
+          ssm_param_path: "/gitops/shared"
+
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config=backend.hcl \
+            -reconfigure \
+            -input=false
+        env:
+          TF_VAR_linode_token: ${{ env.LINODE_TOKEN }}
+
+      - name: Terraform Plan (pre-apply)
+        id: plan
+        run: |
+          TFVARS_ARG=""
+          if [ -f "terraform.tfvars" ]; then
+            TFVARS_ARG="-var-file=terraform.tfvars"
+          fi
+
+          set +e
+          terraform plan \
+            -input=false \
+            -detailed-exitcode \
+            -out=tfplan \
+            ${TFVARS_ARG} \
+            2>&1 | grep -v -iE "^\s*(token|secret|password)\s*="
+          PLAN_EXIT=${PIPESTATUS[0]}
+
+          case "${PLAN_EXIT}" in
+            0) echo "has_changes=false" >> "$GITHUB_OUTPUT" ;;
+            2) echo "has_changes=true"  >> "$GITHUB_OUTPUT" ;;
+            1) echo "::error title=Plan Failed::Plan step failed before apply"; exit 1 ;;
+          esac
+        env:
+          TF_VAR_linode_token: ${{ env.LINODE_TOKEN }}
+          TF_VAR_write_kubeconfig_files: "false"
+
+      - name: Terraform Apply
+        id: apply
+        run: |
+          terraform apply \
+            -input=false \
+            -auto-approve \
+            tfplan \
+            2>&1 | grep -v -iE "^\s*(token|secret|password)\s*="
+        env:
+          TF_VAR_linode_token: ${{ env.LINODE_TOKEN }}
+          TF_VAR_write_kubeconfig_files: "false"
+
+      - name: Post Apply Summary
+        if: always()
+        run: |
+          {
+            echo "## Terraform Apply: \`${{ inputs.plan_key }}\`"
+            echo ""
+            echo "| Field | Value |"
+            echo "|-------|-------|"
+            echo "| Environment | \`${{ inputs.environment }}\` |"
+            echo "| Phase | \`${{ inputs.plan_key }}\` |"
+            echo "| Outcome | \`${{ steps.apply.outcome }}\` |"
+            echo "| Commit | \`${{ github.sha }}\` |"
+            echo "| Actor | @${{ github.actor }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Notify on Apply Failure
+        if: failure()
+        run: |
+          echo "::error title=Apply Failed::terraform apply failed for ${{ inputs.plan_key }}"
+          echo "Check the logs above for details."
+          echo "State may be partially modified — review before re-running."

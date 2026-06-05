@@ -1,0 +1,212 @@
+# =============================================================================
+# terraform-apply-prod.yml — Terraform Apply 主流程（PROD）
+# =============================================================================
+#
+# ⛔  生產環境 Pipeline — 觸發條件嚴格限制
+#
+# 生產基礎設施佈建入口。
+# 特意與 terraform-apply-dev.yml（dev）分離，徹底消除
+# 因 branch push 而意外部署至生產的可能性。
+#
+# 觸發條件：
+#   - push semantic version tag（v*）— 唯一自動觸發方式
+#     範例: v1.0.0, v1.2.3, v2.0.0-rc1
+#     打 tag 即部署: git tag v1.2.3 && git push origin v1.2.3
+#   - workflow_dispatch — 手動生產 apply（仍需通過 Environment 門戳）
+#
+# 安全控制：
+#   ✗  push.branches  — 故意不設（不允許提交自動 apply）
+#   ✗  pull_request   — 故意不設（PR 僅由 terraform-plan.yml 執行 plan）
+#   ✓  push.tags v*   — 明確的發佈門戳（語義化版本號）
+#   ✓  GitHub Environment "prod" — 手動批准門戳
+#      設定於: Settings → Environments → prod → Required reviewers
+#   ✓  Concurrency group — 防止生產同時部署
+#   ✓  paths-ignore — tag 觸發不需要（僅有標記的提交才會到生產）
+#
+# 稽核設計：
+#   每次生產部署都跟一個不可變更的 git tag 和
+#   GitHub Environment 批准記錄連結，滿足變更管理稽核要求。
+#
+# 執行順序：
+#   ┌─────────────────────────────────────────────────────────────────┐
+#   │  [Bootstrap] bootstrap-backend                                  │
+#   │  AWS S3 bucket（版本控制 + 加密 + 封鎖公開存取）              │
+#   ├─────────────────────────────────────────────────────────────────┤
+#   │  [Phase 1] apply-clusters                                       │
+#   │  terraform/environments/prod → 建立 LKE cluster             │
+#   │  寫入: SSM api-endpoint, ca-cert                              │
+#   ├─────────────────────────────────────────────────────────────────┤
+#   │  [Phase 2] apply-k8s          （needs: apply-clusters）          │
+#   │  terraform/environments/prod-k8s → ArgoCD SA/RBAC/Token        │
+#   │  讀取: 由 S3 bridge 下載的 Phase 1 state                  │
+#   │  寫入: SSM token（SecureString）                               │
+#   ├─────────────────────────────────────────────────────────────────┤
+#   │  [Post-Provision] cluster-post-provision.yml（workflow_call）    │
+#   │  統籌: 健康檢查 → SA/RBAC 驗證 → 就緒檢查                │
+#   └─────────────────────────────────────────────────────────────────┘
+#
+# 環境保護：
+#   prod — Phase 1 與 Phase 2 執行前需手動批准。
+#          _tf-apply.yml 設定 `environment: prod`，觸發 GitHub Environment 保護門戳。
+#
+# Concurrency：
+#   同時只允許一個生產 apply。新的執行會排隊而非取消。
+#   與 terraform-apply-dev.yml 的 dev concurrency group 完全分離。
+# =============================================================================
+
+name: "Terraform Apply — Production"
+
+on:
+  # ── 主要觸發：明確的 semantic version 發佈 tag ──────────────────────────────────
+  # 僅文件提交不會到達生產，因為它們永遠不會被打上 v* tag。
+  # tag 觸發不需要額外的 paths-ignore。
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"        # strict semver: v1.0.0, v2.3.4
+      - "v[0-9]+.[0-9]+.[0-9]+-*"      # pre-release: v1.0.0-rc1, v2.0.0-beta.1
+
+  # ── 次要觸發：手動發佈（僅限生產，仍需領域門戳）─────────────────────────────
+  workflow_dispatch:
+    inputs:
+      skip_post_provision:
+        description: "Skip post-provision validation (use with caution)"
+        type: boolean
+        default: false
+
+# 不允許並行生產部署。
+# 與 dev concurrency group（tf-apply-dev）完全分離。
+concurrency:
+  group: tf-apply-prod
+  cancel-in-progress: false
+
+env:
+  # 此 pipeline 僅限生產。TARGET_ENV 始終為 "prod"。
+  # Dev 部署一律由 terraform-apply-dev.yml 處理。
+  TARGET_ENV: prod
+
+jobs:
+  # ── Pre-flight: validate required secrets are configured ──────────────────
+  preflight:
+    name: "Pre-flight Check [prod]"
+    runs-on: ubuntu-latest
+    outputs:
+      target_env: ${{ steps.set-env.outputs.target_env }}
+      release_tag: ${{ steps.set-env.outputs.release_tag }}
+    steps:
+      - name: Resolve target environment and release tag
+        id: set-env
+        env:
+          GH_REF_TYPE:   ${{ github.ref_type }}
+          GH_REF_NAME:   ${{ github.ref_name }}
+          GH_RUN_NUMBER: ${{ github.run_number }}
+          GH_ACTOR:      ${{ github.actor }}
+          GH_SHA:        ${{ github.sha }}
+        run: |
+          echo "target_env=prod" >> "$GITHUB_OUTPUT"
+
+          # 擷取 tag 名稱供稽核軌跡使用
+          if [ "${GH_REF_TYPE}" = "tag" ]; then
+            RELEASE_TAG="${GH_REF_NAME}"
+          else
+            RELEASE_TAG="manual-dispatch-${GH_RUN_NUMBER}"
+          fi
+          echo "release_tag=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
+
+          echo "Target environment: prod"
+          echo "Release tag: ${RELEASE_TAG}"
+          echo "Triggered by: ${GH_ACTOR}"
+          echo "Commit SHA: ${GH_SHA}"
+
+      - name: Validate OIDC prerequisites
+        env:
+          AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+        run: |
+          if [ -z "${AWS_ACCOUNT_ID}" ]; then
+            echo "::error title=Missing Variable::AWS_ACCOUNT_ID repository variable is not configured"
+            echo "See README.md → CI/CD Configuration"
+            exit 1
+          fi
+          echo "AWS Account ID configured ✓"
+
+  # ── Bootstrap：確保 S3 bucket 存在 ─────────────────────────────────────────
+  bootstrap-backend:
+    name: "Bootstrap S3 Backend [prod]"
+    needs: preflight
+    uses: ./.github/workflows/_bootstrap-backend.yml
+    with:
+      environment: prod
+
+  # ── Phase 1：建立 LKE Cluster ───────────────────────────────────────────────
+  # 注意: _tf-apply.yml 內部設定 `environment: prod`，執行前觸發手動批准門戳。
+  apply-clusters:
+    name: "Phase 1 — Apply Clusters [prod]"
+    needs: [preflight, bootstrap-backend]
+    uses: ./.github/workflows/_tf-apply.yml
+    with:
+      environment: prod
+      tf_dir: "terraform/environments/prod"
+      plan_key: "prod-clusters"
+
+  # ── Phase 2：ArgoCD SA / RBAC / Token ──────────────────────────────────────────────
+  # 注意: 同樣由 _tf-apply.yml 內部的 GitHub Environment "prod" 批准門戳把射。
+  apply-k8s:
+    name: "Phase 2 — Apply K8s SA/RBAC [prod]"
+    needs: [preflight, apply-clusters]
+    uses: ./.github/workflows/_tf-apply.yml
+    with:
+      environment: prod
+      tf_dir: "terraform/environments/prod-k8s"
+      plan_key: "prod-k8s"
+
+  # ── Post-Provision：健康 + SA/RBAC + 就緒驗證 ────────────────────────────────────────
+  post-provision:
+    name: "Post-Provision Validation [prod]"
+    needs: [preflight, apply-k8s]
+    if: |
+      needs.apply-k8s.result == 'success' &&
+      (github.event_name != 'workflow_dispatch' || inputs.skip_post_provision != true)
+    uses: ./.github/workflows/cluster-post-provision.yml
+    with:
+      environment: prod
+
+  # ── Final Pipeline Summary ────────────────────────────────────────────────────
+  pipeline-summary:
+    name: "Pipeline Summary"
+    runs-on: ubuntu-latest
+    needs: [preflight, bootstrap-backend, apply-clusters, apply-k8s, post-provision]
+    if: always()
+    steps:
+      - name: Generate Pipeline Summary
+        run: |
+          RELEASE_TAG="${{ needs.preflight.outputs.release_tag }}"
+          {
+            echo "# GitOps Cluster Pipeline Summary — Production"
+            echo ""
+            echo "**Environment:** \`prod\`  "
+            echo "**Release Tag:** \`${RELEASE_TAG}\`  "
+            echo "**Triggered by:** @${{ github.actor }}  "
+            echo "**Commit:** \`${{ github.sha }}\`  "
+            echo "**Run:** [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+            echo ""
+            echo "## Job Results"
+            echo ""
+            echo "| Stage | Job | Status |"
+            echo "|-------|-----|--------|"
+            echo "| Pre-flight | Validate OIDC prerequisites | ${{ needs.preflight.result }} |"
+            echo "| Bootstrap | S3 bucket (native locking) | ${{ needs.bootstrap-backend.result }} |"
+            echo "| Phase 1 | Apply clusters | ${{ needs.apply-clusters.result }} |"
+            echo "| Phase 2 | Apply k8s SA/RBAC | ${{ needs.apply-k8s.result }} |"
+            echo "| Validation | Post-provision | ${{ needs.post-provision.result }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Set pipeline result
+        env:
+          CLUSTER_RESULT: ${{ needs.apply-clusters.result }}
+          K8S_RESULT:     ${{ needs.apply-k8s.result }}
+        run: |
+          if [ "${CLUSTER_RESULT}" != "success" ] || [ "${K8S_RESULT}" != "success" ]; then
+            echo "::error::Pipeline failed — production infrastructure may be in partial state"
+            echo "Check logs and re-run after reviewing the terraform state."
+            exit 1
+          fi
+          echo "Production pipeline completed successfully ✓"

@@ -1,0 +1,67 @@
+# =============================================================================
+# cluster-post-provision.yml — Post-Provision 指令統籌
+# =============================================================================
+#
+# Terraform Phase 1 + Phase 2 apply 後，統籌執行驗證指令。
+#
+# 執行順序（嚴格順序）：
+#   Step 1 — check-cluster-health.sh      ：API server、節點、系統 pod
+#   Step 2 — verify-sa-rbac.sh            ：ArgoCD SA / ClusterRole / CRB
+#   Step 3 — validate-cluster-readiness.sh：端對端 SA token + SSM 參數
+#
+# 觸發條件：
+#   - workflow_call（由 terraform-apply-dev.yml 在 Phase 2 後呼叫）
+#   - workflow_dispatch（手動重新驗證，不需重新 apply）
+#
+# 僅文件變更行為：
+#   此工作流程沒有 push/pull_request 觸發條件 — 僅由
+#   workflow_call（來自 terraform-apply-dev.yml / terraform-apply-prod.yml）
+#   或 workflow_dispatch 呼叫。僅文件提交因此永遠不會觸發此工作流程。
+#
+# 安全性：
+#   - SSM 內的 SA token 在指令中擷取，以 ::add-mask:: 遮掩
+#   - job 輸出和 step summary 不包含敏感資料
+#   - kubeconfig 為臨時檔案（tempfile，由 trap 刪除）
+# =============================================================================
+
+name: "Cluster Post-Provision Validation"
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "Target environment (dev | prod)"
+        type: string
+        required: true
+      cluster_labels:
+        description: "Space-separated cluster labels (auto-discovered if empty)"
+        type: string
+        default: ""
+
+    outputs:
+      validation_result:
+        description: "Overall result (success | failure)"
+        value: ${{ jobs.validate.outputs.validation_result }}
+
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        type: choice
+        options: [dev, prod]
+        required: true
+        default: "dev"
+      cluster_labels:
+        description: "Specific cluster labels (space-separated, empty = all)"
+        type: string
+        default: ""
+
+jobs:
+  validate:
+    name: "Post-Provision [${{ inputs.environment }}]"
+    outputs:
+      validation_result: ${{ steps.gate.outputs.result }}
+    uses: ./.github/workflows/_cluster-validate.yml
+    with:
+      environment: ${{ inputs.environment }}
+      cluster_labels: ${{ inputs.cluster_labels }}

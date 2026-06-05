@@ -36,7 +36,8 @@ on:
         description: "Overall validation result (success | failure)"
         value: ${{ jobs.readiness-gate.outputs.result }}
 
-  # ── Job 1：健康檢查（全部 cluster）────────────────────────────────────────────
+jobs:
+  # ── Job 1：健康檢查（全部 cluster）──────────────────────────────────────────
   health-check:
     name: "Health Check [${{ inputs.environment }}]"
     runs-on: ubuntu-latest

@@ -1,0 +1,20 @@
+name: 'Configure AWS Credentials'
+description: 'Configure AWS credentials via OIDC'
+
+inputs:
+  aws-account-id:
+    description: 'AWS Account ID'
+    required: true
+  aws-region:
+    description: 'AWS Region'
+    required: false
+    default: 'ap-southeast-1'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Configure AWS credentials via OIDC
+      uses: aws-actions/configure-aws-credentials@v6
+      with:
+        role-to-assume: arn:aws:iam::${{ inputs.aws-account-id }}:role/github-oidc-gitops-demo-role
+        aws-region: ${{ inputs.aws-region }}

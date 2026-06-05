@@ -59,8 +59,6 @@ on:
 jobs:
   validate:
     name: "Post-Provision [${{ inputs.environment }}]"
-    outputs:
-      validation_result: ${{ steps.gate.outputs.result }}
     uses: ./.github/workflows/_cluster-validate.yml
     with:
       environment: ${{ inputs.environment }}

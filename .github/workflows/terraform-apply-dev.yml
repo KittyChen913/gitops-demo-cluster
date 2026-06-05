@@ -106,10 +106,10 @@ jobs:
 
       - name: Validate OIDC prerequisites
         env:
-          AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
         run: |
           if [ -z "${AWS_ACCOUNT_ID}" ]; then
-            echo "::error title=Missing Variable::AWS_ACCOUNT_ID repository variable is not configured"
+            echo "::error title=Missing Secret::AWS_ACCOUNT_ID repository secret is not configured"
             echo "See README.md → CI/CD Configuration"
             exit 1
           fi

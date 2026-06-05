@@ -82,6 +82,13 @@ env:
   # 生產部署一律由 terraform-apply-prod.yml 處理。
   TARGET_ENV: dev
 
+# Reusable workflows (_bootstrap-backend.yml, _tf-apply.yml) 要求 id-token: write
+# 來執行 AWS OIDC 身份驗證。頂層 permissions 必須明確授予，
+# 否則 nested job 會被限制為 id-token: none。
+permissions:
+  id-token: write
+  contents: read
+
 jobs:
   # ── Pre-flight: validate required secrets are configured ──────────────────
   preflight:

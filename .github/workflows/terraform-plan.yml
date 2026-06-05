@@ -29,6 +29,7 @@ on:
       - "terraform/**"
       - ".github/workflows/terraform-plan.yml"
       - ".github/workflows/_tf-plan.yml"
+      - ".github/actions/**"
 
   # 允許手動執行 plan
   workflow_dispatch:

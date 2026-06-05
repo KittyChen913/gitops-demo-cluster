@@ -16,5 +16,5 @@ runs:
     - name: Configure AWS credentials via OIDC
       uses: aws-actions/configure-aws-credentials@v6
       with:
-        role-to-assume: arn:aws:iam::${{ inputs.aws-account-id }}:role/github-oidc-gitops-demo-role
+        role-to-assume: arn:aws:iam::${{ inputs.aws-account-id }}:role/github-oidc-gitops-demo-cluster-role
         aws-region: ${{ inputs.aws-region }}

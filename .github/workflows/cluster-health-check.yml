@@ -146,9 +146,11 @@ jobs:
             fi
           done
 
-          echo "checked=${CHECKED}" >> "$GITHUB_OUTPUT"
-          echo "failed=${FAILED}"   >> "$GITHUB_OUTPUT"
-          echo "labels=${LABELS}"   >> "$GITHUB_OUTPUT"
+          {
+            echo "checked=${CHECKED}"
+            echo "failed=${FAILED}"
+            echo "labels=${LABELS}"
+          } >> "$GITHUB_OUTPUT"
 
           if [ "${FAILED}" -gt "0" ]; then
             exit 1

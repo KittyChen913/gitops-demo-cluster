@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 # =============================================================================
 # check-cluster-health.sh — Kubernetes Cluster 健康檢查
 # =============================================================================
@@ -118,7 +118,7 @@ if [ -z "${NODE_STATUS}" ]; then
 fi
 
 TOTAL_NODES=$(echo "${NODE_STATUS}" | wc -l | tr -d ' ')
-NOT_READY=$(echo "${NODE_STATUS}" | grep -v -E "\sReady\s" | wc -l | tr -d ' ' || echo "0")
+NOT_READY=$(grep -vc -E "[[:space:]]Ready[[:space:]]" <<< "${NODE_STATUS}" || true)
 
 echo "      Nodes: ${TOTAL_NODES} total, ${NOT_READY} not-ready"
 
@@ -136,8 +136,7 @@ echo "      All ${TOTAL_NODES} nodes are Ready"
 echo "[5/5] Checking critical system pods (kube-system)..."
 
 FAILED_PODS=$(kubectl get pods -n kube-system --no-headers --request-timeout="${HEALTH_TIMEOUT}s" 2>/dev/null \
-  | grep -v -E "Running|Completed|Succeeded" \
-  | wc -l | tr -d ' ' || echo "0")
+  | grep -vc -E "Running|Completed|Succeeded" || true)
 
 if [ "${FAILED_PODS}" -gt "0" ]; then
   echo "::warning title=System Pods Degraded::${FAILED_PODS} system pod(s) not running in ${CLUSTER_LABEL}"

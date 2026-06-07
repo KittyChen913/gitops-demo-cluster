@@ -30,6 +30,10 @@ on:
         description: "Space-separated list of cluster labels to validate (auto-discovered if empty)"
         type: string
         default: ""
+    secrets:
+      AWS_ACCOUNT_ID:
+        description: "AWS account ID used by the OIDC role ARN"
+        required: true
 
     outputs:
       validation_result:

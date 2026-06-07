@@ -33,6 +33,10 @@ on:
         description: "Unique artifact key suffix (e.g., dev-clusters, dev-k8s)"
         type: string
         required: true
+    secrets:
+      AWS_ACCOUNT_ID:
+        description: "AWS account ID used by the OIDC role ARN"
+        required: true
     outputs:
       has_changes:
         description: "true if plan contains infrastructure changes"

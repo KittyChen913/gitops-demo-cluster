@@ -154,6 +154,7 @@ jobs:
       needs.apply-k8s.result == 'success' &&
       (github.event_name != 'workflow_dispatch' || inputs.skip_post_provision != true)
     uses: ./.github/workflows/cluster-post-provision.yml
+    secrets: inherit
     with:
       environment: ${{ needs.preflight.outputs.target_env }}
 

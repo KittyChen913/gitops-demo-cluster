@@ -23,6 +23,10 @@ on:
         description: "Target environment (dev | prod) — used for logging only"
         type: string
         required: true
+    secrets:
+      AWS_ACCOUNT_ID:
+        description: "AWS account ID used by the OIDC role ARN"
+        required: true
 
 jobs:
   bootstrap:

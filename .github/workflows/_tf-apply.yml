@@ -35,6 +35,10 @@ on:
         description: "Unique key suffix matching the plan artifact (e.g., dev-clusters)"
         type: string
         required: true
+    secrets:
+      AWS_ACCOUNT_ID:
+        description: "AWS account ID used by the OIDC role ARN"
+        required: true
     outputs:
       apply_outcome:
         description: "Outcome of the apply step (success | failure)"

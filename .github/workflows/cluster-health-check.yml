@@ -50,6 +50,10 @@ on:
         description: "Specific cluster label (empty = check all)"
         type: string
         default: ""
+    secrets:
+      AWS_ACCOUNT_ID:
+        description: "AWS account ID used by the OIDC role ARN"
+        required: true
     outputs:
       health_result:
         description: "Health check result (success | failure)"

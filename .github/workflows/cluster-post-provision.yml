@@ -37,6 +37,10 @@ on:
         description: "Space-separated cluster labels (auto-discovered if empty)"
         type: string
         default: ""
+    secrets:
+      AWS_ACCOUNT_ID:
+        description: "AWS account ID used by the OIDC role ARN"
+        required: true
 
     outputs:
       validation_result:
@@ -63,3 +67,4 @@ jobs:
     with:
       environment: ${{ inputs.environment }}
       cluster_labels: ${{ inputs.cluster_labels }}
+    secrets: inherit

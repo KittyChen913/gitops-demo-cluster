@@ -124,6 +124,7 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.dev_clusters == 'true'
     uses: ./.github/workflows/_tf-plan.yml
+    secrets: inherit
     with:
       environment: "dev"
       tf_dir: "terraform/environments/dev"
@@ -135,6 +136,7 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.dev_k8s == 'true'
     uses: ./.github/workflows/_tf-plan.yml
+    secrets: inherit
     with:
       environment: "dev"
       tf_dir: "terraform/environments/dev-k8s"
@@ -146,6 +148,7 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.prod_clusters == 'true'
     uses: ./.github/workflows/_tf-plan.yml
+    secrets: inherit
     with:
       environment: "prod"
       tf_dir: "terraform/environments/prod"
@@ -157,6 +160,7 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.prod_k8s == 'true'
     uses: ./.github/workflows/_tf-plan.yml
+    secrets: inherit
     with:
       environment: "prod"
       tf_dir: "terraform/environments/prod-k8s"

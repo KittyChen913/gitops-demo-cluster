@@ -104,17 +104,29 @@ jobs:
         id: plan
         run: |
           set +e
+
+          TFVARS_ARGS=()
+          if [ -f "terraform.tfvars" ]; then
+            TFVARS_ARGS=(-var-file=terraform.tfvars)
+          fi
+
           terraform plan \
             -input=false \
             -detailed-exitcode \
             -out=tfplan \
-            2>&1 | grep -v -iE "^\s*(token|secret|password)\s*="
-          PLAN_EXIT=${PIPESTATUS[0]}
+            "${TFVARS_ARGS[@]}" \
+            > terraform-plan.log 2>&1
+
+          PLAN_EXIT=$?
+          set -e
+
+          grep -v -iE "^\s*(token|secret|password)\s*=" terraform-plan.log || true
 
           case "${PLAN_EXIT}" in
             0) echo "has_changes=false" >> "$GITHUB_OUTPUT" ;;
             2) echo "has_changes=true"  >> "$GITHUB_OUTPUT" ;;
             1) echo "::error title=Plan Failed::Plan step failed before apply"; exit 1 ;;
+            *) echo "::error title=Plan Failed::Plan exited with unexpected code ${PLAN_EXIT}"; exit 1 ;;
           esac
         env:
           TF_VAR_linode_token: ${{ env.LINODE_TOKEN }}
@@ -123,11 +135,23 @@ jobs:
       - name: Terraform Apply
         id: apply
         run: |
+          set +e
+
           terraform apply \
             -input=false \
             -auto-approve \
             tfplan \
-            2>&1 | grep -v -iE "^\s*(token|secret|password)\s*="
+            > terraform-apply.log 2>&1
+
+          APPLY_EXIT=$?
+          set -e
+
+          grep -v -iE "^\s*(token|secret|password)\s*=" terraform-apply.log || true
+
+          if [ "${APPLY_EXIT}" -ne "0" ]; then
+            echo "::error title=Apply Failed::terraform apply exited with code ${APPLY_EXIT}"
+            exit "${APPLY_EXIT}"
+          fi
         env:
           TF_VAR_linode_token: ${{ env.LINODE_TOKEN }}
           TF_VAR_write_kubeconfig_files: "false"

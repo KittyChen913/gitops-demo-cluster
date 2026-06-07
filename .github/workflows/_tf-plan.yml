@@ -98,24 +98,28 @@ jobs:
           set +e
 
           # 根據是否存在 tfvars 決定是否傳入 — 不是所有環境都有提交 tfvars
-          TFVARS_ARG=""
+          TFVARS_ARGS=()
           if [ -f "terraform.tfvars" ]; then
-            TFVARS_ARG="-var-file=terraform.tfvars"
+            TFVARS_ARGS=(-var-file=terraform.tfvars)
           fi
 
           terraform plan \
             -input=false \
             -detailed-exitcode \
             -out=tfplan \
-            ${TFVARS_ARG} \
-            2>&1 | grep -v -iE "^\s*(token|secret|password)\s*=" || true
+            "${TFVARS_ARGS[@]}" \
+            > terraform-plan.log 2>&1
 
-          PLAN_EXIT=${PIPESTATUS[0]}
+          PLAN_EXIT=$?
+          set -e
+
+          grep -v -iE "^\s*(token|secret|password)\s*=" terraform-plan.log || true
 
           case "${PLAN_EXIT}" in
             0) echo "has_changes=false" >> "$GITHUB_OUTPUT" ;;
             2) echo "has_changes=true"  >> "$GITHUB_OUTPUT" ;;
             1) echo "::error title=Plan Failed::terraform plan exited with error" ; exit 1 ;;
+            *) echo "::error title=Plan Failed::terraform plan exited with unexpected code ${PLAN_EXIT}" ; exit 1 ;;
           esac
         env:
           TF_VAR_linode_token: ${{ env.LINODE_TOKEN }}
@@ -129,9 +133,8 @@ jobs:
             echo ""
             if [ -f tfplan ]; then
               echo '```hcl'
-              terraform show -no-color tfplan 2>&1 \
-                | grep -v -iE "^\s*(token|secret|password)\s*=" \
-                | head -200
+              terraform show -no-color tfplan > terraform-plan-show.log 2>&1
+              grep -v -iE "^\s*(token|secret|password)\s*=" terraform-plan-show.log | head -200 || true
               echo '```'
             else
               echo "_Plan file not available_"

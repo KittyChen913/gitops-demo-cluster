@@ -32,7 +32,7 @@ on:
         type: string
         required: true
       plan_key:
-        description: "Unique key suffix matching the plan artifact (e.g., dev-clusters)"
+        description: "Unique apply phase label (e.g., dev-clusters)"
         type: string
         required: true
     secrets:
@@ -101,7 +101,6 @@ jobs:
           TF_VAR_linode_token: ${{ env.LINODE_TOKEN }}
 
       - name: Terraform Plan (pre-apply)
-        id: plan
         run: |
           set +e
 
@@ -123,8 +122,8 @@ jobs:
           grep -v -iE "^\s*(token|secret|password)\s*=" terraform-plan.log || true
 
           case "${PLAN_EXIT}" in
-            0) echo "has_changes=false" >> "$GITHUB_OUTPUT" ;;
-            2) echo "has_changes=true"  >> "$GITHUB_OUTPUT" ;;
+            0) echo "No Terraform changes detected." ;;
+            2) echo "Terraform changes detected." ;;
             1) echo "::error title=Plan Failed::Plan step failed before apply"; exit 1 ;;
             *) echo "::error title=Plan Failed::Plan exited with unexpected code ${PLAN_EXIT}"; exit 1 ;;
           esac

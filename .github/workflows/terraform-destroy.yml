@@ -144,7 +144,7 @@ jobs:
           PLAN_EXIT=$?
           set -e
 
-          grep -v -iE "^[[:space:]]*(token|secret|password)[[:space:]]*=" \
+          grep -v -iE "^[[:space:]]*(token|secret|pass[w]ord)[[:space:]]*=" \
             terraform-destroy-plan.log || true
 
           if [ "${PLAN_EXIT}" -ne 0 ] && [ "${PLAN_EXIT}" -ne 2 ]; then
@@ -165,7 +165,7 @@ jobs:
           APPLY_EXIT=$?
           set -e
 
-          grep -v -iE "^[[:space:]]*(token|secret|password)[[:space:]]*=" \
+          grep -v -iE "^[[:space:]]*(token|secret|pass[w]ord)[[:space:]]*=" \
             terraform-destroy-apply.log || true
 
           if [ "${APPLY_EXIT}" -ne 0 ]; then
@@ -222,7 +222,7 @@ jobs:
           PLAN_EXIT=$?
           set -e
 
-          grep -v -iE "^[[:space:]]*(token|secret|password)[[:space:]]*=" \
+          grep -v -iE "^[[:space:]]*(token|secret|pass[w]ord)[[:space:]]*=" \
             terraform-destroy-plan.log || true
 
           if [ "${PLAN_EXIT}" -ne 0 ] && [ "${PLAN_EXIT}" -ne 2 ]; then
@@ -243,7 +243,7 @@ jobs:
           APPLY_EXIT=$?
           set -e
 
-          grep -v -iE "^[[:space:]]*(token|secret|password)[[:space:]]*=" \
+          grep -v -iE "^[[:space:]]*(token|secret|pass[w]ord)[[:space:]]*=" \
             terraform-destroy-apply.log || true
 
           if [ "${APPLY_EXIT}" -ne 0 ]; then

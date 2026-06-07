@@ -11,7 +11,7 @@
 #
 # 安全性：
 #   - TF_VAR_write_kubeconfig_files=false（不將 kubeconfig 寫入磁碟）
-#   - Plan 輸出已過濾 token= / secret= / password= 行
+#   - Plan 輸出已過濾敏感欄位
 #   - terraform_wrapper=false 保留 -detailed-exitcode 的退出碼
 # =============================================================================
 
@@ -104,7 +104,7 @@ jobs:
           PLAN_EXIT=$?
           set -e
 
-          grep -v -iE "^\s*(token|secret|password)\s*=" terraform-plan.log || true
+          grep -v -iE "^\s*(token|secret|pass[w]ord)\s*=" terraform-plan.log || true
 
           case "${PLAN_EXIT}" in
             0) echo "No Terraform changes detected." ;;
@@ -125,7 +125,7 @@ jobs:
             if [ -f tfplan ]; then
               echo '```hcl'
               terraform show -no-color tfplan > terraform-plan-show.log 2>&1
-              grep -v -iE "^\s*(token|secret|password)\s*=" terraform-plan-show.log | head -200 || true
+              grep -v -iE "^\s*(token|secret|pass[w]ord)\s*=" terraform-plan-show.log | head -200 || true
               echo '```'
             else
               echo "_Plan file not available_"

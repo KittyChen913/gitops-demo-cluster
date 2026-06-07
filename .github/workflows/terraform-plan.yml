@@ -25,20 +25,15 @@ on:
   pull_request:
     branches:
       - master
-    paths:
-      - "terraform/**"
-      - ".github/workflows/terraform-plan.yml"
-      - ".github/workflows/_tf-plan.yml"
-      - ".github/actions/**"
 
   # 允許手動執行 plan
   workflow_dispatch:
     inputs:
       environment:
-        description: "Environment to plan (leave empty to plan all)"
+        description: "Environment to plan"
         type: choice
-        options: ["", "dev", "prod"]
-        default: ""
+        options: [all, dev, prod]
+        default: "all"
 
 # 避免同一個 PR 被重複執行 Terraform Plan
 concurrency:
@@ -55,6 +50,7 @@ jobs:
       dev_k8s:      ${{ steps.filter.outputs.dev_k8s }}
       prod_clusters: ${{ steps.filter.outputs.prod_clusters }}
       prod_k8s:     ${{ steps.filter.outputs.prod_k8s }}
+      plan_required: ${{ steps.filter.outputs.plan_required }}
 
     steps:
       - name: Checkout
@@ -74,13 +70,14 @@ jobs:
           if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
             DEV_RUN=false
             PROD_RUN=false
-            if [ -z "${ENV_INPUT}" ] || [ "${ENV_INPUT}" = "dev" ];  then DEV_RUN=true;  fi
-            if [ -z "${ENV_INPUT}" ] || [ "${ENV_INPUT}" = "prod" ]; then PROD_RUN=true; fi
+            if [ "${ENV_INPUT}" = "all" ] || [ "${ENV_INPUT}" = "dev" ];  then DEV_RUN=true;  fi
+            if [ "${ENV_INPUT}" = "all" ] || [ "${ENV_INPUT}" = "prod" ]; then PROD_RUN=true; fi
             {
               echo "dev_clusters=${DEV_RUN}"
               echo "dev_k8s=${DEV_RUN}"
               echo "prod_clusters=${PROD_RUN}"
               echo "prod_k8s=${PROD_RUN}"
+              echo "plan_required=true"
             } >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -93,16 +90,23 @@ jobs:
           echo "Changed files:"
           echo "${CHANGED}"
 
-          # 模組變更影響全部環境
-          MODULES_CHANGED=false
-          if echo "${CHANGED}" | grep -q "^terraform/modules/"; then
-            MODULES_CHANGED=true
-            echo "偵測到模組變更 — 將執行全部環境 plan"
+          PLAN_REQUIRED=false
+          if echo "${CHANGED}" | grep -qE \
+            "^(terraform/|\.github/workflows/(terraform-plan|_tf-plan)\.yml$|\.github/actions/)"; then
+            PLAN_REQUIRED=true
+          fi
+
+          # 共用 Terraform / CI 元件變更可能影響全部環境。
+          SHARED_CHANGED=false
+          if echo "${CHANGED}" | grep -qE \
+            "^(terraform/modules/|terraform/environments/bootstrap/|\.github/workflows/(terraform-plan|_tf-plan)\.yml$|\.github/actions/)"; then
+            SHARED_CHANGED=true
+            echo "偵測到共用元件變更 — 將執行全部環境 plan"
           fi
 
           check_path() {
             local path_pattern="$1"
-            if [ "${MODULES_CHANGED}" = "true" ]; then
+            if [ "${SHARED_CHANGED}" = "true" ]; then
               echo "true"
             elif echo "${CHANGED}" | grep -q "^${path_pattern}"; then
               echo "true"
@@ -116,6 +120,7 @@ jobs:
             echo "dev_k8s=$(check_path 'terraform/environments/dev-k8s/')"
             echo "prod_clusters=$(check_path 'terraform/environments/prod/')"
             echo "prod_k8s=$(check_path 'terraform/environments/prod-k8s/')"
+            echo "plan_required=${PLAN_REQUIRED}"
           } >> "$GITHUB_OUTPUT"
 
   # ── Plan: dev/clusters ───────────────────────────────────────────────────────
@@ -171,11 +176,19 @@ jobs:
   plan-gate:
     name: "Plan Gate (all envs)"
     runs-on: ubuntu-latest
-    needs: [plan-dev-clusters, plan-dev-k8s, plan-prod-clusters, plan-prod-k8s]
+    needs: [detect-changes, plan-dev-clusters, plan-dev-k8s, plan-prod-clusters, plan-prod-k8s]
     if: always()
     steps:
       - name: Evaluate plan results
+        env:
+          DETECT_RESULT: ${{ needs.detect-changes.result }}
+          PLAN_REQUIRED: ${{ needs.detect-changes.outputs.plan_required }}
         run: |
+          if [ "${DETECT_RESULT}" != "success" ]; then
+            echo "::error::Change detection did not complete successfully"
+            exit 1
+          fi
+
           RESULTS=(
             "${{ needs.plan-dev-clusters.result }}"
             "${{ needs.plan-dev-k8s.result }}"
@@ -184,9 +197,13 @@ jobs:
           )
 
           FAILED=0
+          RAN=0
           for RESULT in "${RESULTS[@]}"; do
             if [ "${RESULT}" = "failure" ] || [ "${RESULT}" = "cancelled" ]; then
               FAILED=$((FAILED + 1))
+            fi
+            if [ "${RESULT}" != "skipped" ]; then
+              RAN=$((RAN + 1))
             fi
           done
 
@@ -204,6 +221,15 @@ jobs:
           if [ "${FAILED}" -gt "0" ]; then
             echo "::error::${FAILED} plan(s) failed or were cancelled — PR cannot be merged"
             exit 1
+          fi
+
+          if [ "${RAN}" -eq "0" ]; then
+            if [ "${PLAN_REQUIRED}" = "true" ]; then
+              echo "::error::Terraform changes were detected, but no environment plan ran"
+              exit 1
+            fi
+            echo "No Terraform plan required for this pull request"
+            exit 0
           fi
 
           echo "All plans passed ✓"

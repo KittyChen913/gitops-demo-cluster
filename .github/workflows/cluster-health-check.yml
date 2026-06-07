@@ -96,7 +96,12 @@ jobs:
           SPECIFIC_LABEL_INPUT: ${{ inputs.cluster_label }}
           AWS_REGION: ap-southeast-1
         run: |
-          chmod +x scripts/check-cluster-health.sh
+          HEALTH_CHECK_SCRIPT="${GITHUB_WORKSPACE}/scripts/check-cluster-health.sh"
+          if [ ! -f "${HEALTH_CHECK_SCRIPT}" ]; then
+            echo "::error::Health check script was not found at ${HEALTH_CHECK_SCRIPT}"
+            echo "Checked out ref=${GITHUB_REF} sha=${GITHUB_SHA}"
+            exit 1
+          fi
 
           SPECIFIC_LABEL="${SPECIFIC_LABEL_INPUT}"
           SSM_PREFIX="/gitops/${CHECK_ENV}/clusters"
@@ -131,7 +136,7 @@ jobs:
             echo "::group::Health Check — ${LABEL}"
             if CLUSTER_ENV="${CHECK_ENV}" \
                CLUSTER_LABEL="${LABEL}" \
-               bash scripts/check-cluster-health.sh; then
+               bash "${HEALTH_CHECK_SCRIPT}"; then
               CHECKED=$((CHECKED + 1))
               echo "::endgroup::"
             else

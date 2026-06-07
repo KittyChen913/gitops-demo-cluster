@@ -8,9 +8,8 @@
 # 出於安全考量封鎖於 dev，防止意外部署至生產。
 #
 # 觸發條件：
-#   - push 到 master（paths: terraform/**）→ 自動 apply dev
-#     注意：paths: terraform/** 已排除僅文件變更
-#     （*.md, README.md, docs/**）— 不需額外 paths-ignore。
+#   - push 到 master 且 dev、bootstrap 或共用 module 變更 → 自動 apply dev
+#     CI workflow、prod 與文件變更不會觸發部署。
 #   - workflow_dispatch → 手動觸發（僅 dev）
 #
 # 生產部署請使用 terraform-apply-prod.yml：
@@ -50,12 +49,10 @@ on:
     branches:
       - master
     paths:
-      - "terraform/**"
-      - ".github/workflows/terraform-apply-dev.yml"
-      - ".github/workflows/_bootstrap-backend.yml"
-      - ".github/workflows/_tf-apply.yml"
-      - ".github/workflows/cluster-post-provision.yml"
-      - ".github/workflows/_cluster-validate.yml"
+      - "terraform/environments/dev/**"
+      - "terraform/environments/dev-k8s/**"
+      - "terraform/environments/bootstrap/**"
+      - "terraform/modules/**"
 
   # NOTE: workflow_dispatch 的生產觸發由 terraform-apply-prod.yml 處理
   workflow_dispatch:

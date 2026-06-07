@@ -99,6 +99,12 @@ jobs:
       target_env: ${{ steps.set-env.outputs.target_env }}
       release_tag: ${{ steps.set-env.outputs.release_tag }}
     steps:
+      - name: Checkout release history
+        if: github.ref_type == 'tag'
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
       - name: Resolve target environment and release tag
         id: set-env
         env:
@@ -113,6 +119,16 @@ jobs:
           # 擷取 tag 名稱供稽核軌跡使用
           if [ "${GH_REF_TYPE}" = "tag" ]; then
             RELEASE_TAG="${GH_REF_NAME}"
+
+            if [[ ! "${RELEASE_TAG}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+              echo "::error title=Invalid Release Tag::${RELEASE_TAG} is not a semantic version tag"
+              exit 1
+            fi
+
+            if ! git merge-base --is-ancestor "${GH_SHA}" "origin/master"; then
+              echo "::error title=Invalid Release Commit::${RELEASE_TAG} does not point to a commit on master"
+              exit 1
+            fi
           else
             RELEASE_TAG="manual-dispatch-${GH_RUN_NUMBER}"
           fi

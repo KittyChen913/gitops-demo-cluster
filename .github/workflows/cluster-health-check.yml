@@ -12,7 +12,7 @@
 #
 # 觸發條件：
 #   - workflow_dispatch（手動）
-#   - schedule（每日 UTC 06:00）
+#   - schedule（每日 UTC 06:17）
 #   - workflow_call（由其他工作流程呼叫，用於快速健康驗證）
 #
 # 僅文件變更行為：
@@ -37,8 +37,8 @@ on:
         default: ""
 
   schedule:
-    # 每日 UTC 06:00 執行健康檢查
-    - cron: "0 6 * * *"
+    # 避開整點的 GitHub Actions 排程高峰。
+    - cron: "17 6 * * *"
 
   workflow_call:
     inputs:

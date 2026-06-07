@@ -13,6 +13,7 @@ variable "write_ssm_parameters" {
 variable "cluster_state_bucket" {
   description = "S3 bucket holding the prod/ Terraform state (output of Phase 1)."
   type        = string
+  default     = "gitops-demo-cluster-tfstate"
 }
 
 variable "cluster_state_key" {

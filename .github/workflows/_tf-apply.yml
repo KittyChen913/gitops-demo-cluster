@@ -99,17 +99,11 @@ jobs:
       - name: Terraform Plan (pre-apply)
         id: plan
         run: |
-          TFVARS_ARG=""
-          if [ -f "terraform.tfvars" ]; then
-            TFVARS_ARG="-var-file=terraform.tfvars"
-          fi
-
           set +e
           terraform plan \
             -input=false \
             -detailed-exitcode \
             -out=tfplan \
-            ${TFVARS_ARG} \
             2>&1 | grep -v -iE "^\s*(token|secret|password)\s*="
           PLAN_EXIT=${PIPESTATUS[0]}
 

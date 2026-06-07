@@ -1,0 +1,45 @@
+name: "Workflow Quality"
+
+on:
+  pull_request:
+    branches:
+      - master
+  push:
+    branches:
+      - master
+    paths:
+      - ".gitattributes"
+      - ".github/workflows/**"
+      - ".github/actions/**"
+      - "scripts/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: workflow-quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  actionlint:
+    name: "Lint GitHub Actions"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Run actionlint
+        uses: docker://rhysd/actionlint:1.7.12
+        with:
+          args: -color
+
+  shellcheck:
+    name: "Lint Shell Scripts"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Run ShellCheck
+        run: shellcheck scripts/*.sh

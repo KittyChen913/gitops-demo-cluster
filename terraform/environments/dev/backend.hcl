@@ -1,4 +1,4 @@
-# Bucket name must match bootstrap/variables.tf:tf_state_bucket (default: "gitops-demo-cluster-tfstate").
+# Bucket name must match bootstrap/variables.tf:tf_state_bucket (default: "gitops-demo-tfstate").
 # Terraform backend blocks do not support variable interpolation — update here when renaming.
-bucket = "gitops-demo-cluster-tfstate"
+bucket = "gitops-demo-tfstate"
 region = "ap-southeast-1"

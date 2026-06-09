@@ -19,5 +19,5 @@ variable "cluster_state_bucket" {
 variable "cluster_state_key" {
   description = "S3 key of the prod/ Terraform state."
   type        = string
-  default     = "gitops-demo-cluster/prod/terraform.tfstate"
+  default     = "gitops-demo-cluster/prod/prod-clusters/terraform.tfstate"
 }

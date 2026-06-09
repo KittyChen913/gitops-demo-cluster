@@ -2,4 +2,4 @@
 
 aws_region           = "ap-southeast-1"
 cluster_state_bucket = "gitops-demo-tfstate"
-cluster_state_key    = "gitops-demo-cluster/prod/terraform.tfstate"
+cluster_state_key    = "gitops-demo-cluster/prod/prod-clusters/terraform.tfstate"

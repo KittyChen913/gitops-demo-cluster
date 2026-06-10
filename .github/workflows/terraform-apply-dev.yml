@@ -8,8 +8,9 @@
 # 出於安全考量封鎖於 dev，防止意外部署至生產。
 #
 # 觸發條件：
-#   - push 到 master 且 dev、bootstrap 或共用 module 變更 → 自動 apply dev
-#     CI workflow、prod 與文件變更不會觸發部署。
+#   - push 到 master 且 dev、bootstrap、共用 module、workflow/action/script
+#     或 .gitattributes 變更 → Quality Gate 通過後自動 apply dev。
+#     prod 與文件變更不會觸發部署。
 #   - workflow_dispatch → 手動觸發（僅 dev）
 #
 # 生產部署請使用 terraform-apply-prod.yml：
@@ -52,6 +53,10 @@ on:
     branches:
       - master
     paths:
+      - ".gitattributes"
+      - ".github/workflows/**"
+      - ".github/actions/**"
+      - "scripts/**"
       - "terraform/environments/dev/**"
       - "terraform/environments/dev-k8s/**"
       - "terraform/environments/bootstrap/**"

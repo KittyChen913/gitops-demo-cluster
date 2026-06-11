@@ -103,7 +103,8 @@ jobs:
         run: |
           terraform init \
             -backend-config=backend.hcl \
-            -reconfigure
+            -reconfigure \
+            -input=false
 
           set +e
           terraform state list > state-list.txt 2> state-list.err
@@ -181,7 +182,8 @@ jobs:
         run: |
           terraform init \
             -backend-config=backend.hcl \
-            -reconfigure
+            -reconfigure \
+            -input=false
 
           set +e
           terraform state list > state-list.txt 2> state-list.err

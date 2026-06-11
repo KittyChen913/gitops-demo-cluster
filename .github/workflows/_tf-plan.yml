@@ -4,8 +4,7 @@
 # 呼叫者: terraform-plan.yml
 #
 # 執行內容：
-#   1. Phase 2 (k8s) 時：下載 Phase 1 state 至本機路徑
-#      （dev-k8s/locals.tf 從 ../dev/terraform.tfstate 讀取）
+#   1. Phase 2 (k8s) 透過 S3 terraform_remote_state 讀取 Phase 1 state
 #   2. terraform init → validate → plan
 #   3. 將淨化後的 plan 結果輸出至 GITHUB_STEP_SUMMARY
 #

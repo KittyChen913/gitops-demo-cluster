@@ -5,7 +5,7 @@
 #
 # 執行內容：
 #   1. 動態配置 S3 backend
-#   2. Phase 2 時：下載 Phase 1 state bridge
+#   2. Phase 2 透過 S3 terraform_remote_state 讀取 Phase 1 state
 #   3. terraform init → plan → apply（自動批准）
 #   4. 輸出 apply 後摘要
 #

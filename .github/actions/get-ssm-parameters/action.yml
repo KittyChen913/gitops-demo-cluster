@@ -11,9 +11,11 @@ runs:
   steps:
     - id: get-ssm
       shell: bash
+      env:
+        SSM_PARAM_PATH: ${{ inputs.ssm_param_path }}
       run: |
         params=$(aws ssm get-parameters-by-path \
-          --path "${{ inputs.ssm_param_path }}" \
+          --path "${SSM_PARAM_PATH}" \
           --recursive \
           --with-decryption \
           --query "Parameters[*].{Name:Name,Value:Value}" \

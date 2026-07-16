@@ -6,13 +6,13 @@ output "environment" {
 output "management_cluster" {
   description = "Dev management cluster metadata."
   value = {
-    id            = module.mgmt.id
-    label         = module.mgmt.label
-    status        = module.mgmt.status
-    region        = module.mgmt.region
-    k8s_version   = module.mgmt.k8s_version
-    cluster_role  = module.mgmt.cluster_role
-    api_endpoints = module.mgmt.api_endpoints
+    id              = module.mgmt.id
+    label           = module.mgmt.label
+    status          = module.mgmt.status
+    region          = module.mgmt.region
+    k8s_version     = module.mgmt.k8s_version
+    cluster_role    = module.mgmt.cluster_role
+    api_endpoints   = module.mgmt.api_endpoints
     kubeconfig_file = module.mgmt.kubeconfig_file
   }
 }
@@ -43,7 +43,7 @@ output "cluster_ids" {
 }
 
 output "kubeconfigs" {
-  description = "Decoded kubeconfigs (sensitive). Use kubeconfig files or terraform output -raw."
+  description = "Decoded kubeconfigs keyed by cluster label (sensitive)."
   value = merge(
     { (module.mgmt.label) = module.mgmt.kubeconfig_decoded },
     { for key, cluster in module.worker : cluster.label => cluster.kubeconfig_decoded }

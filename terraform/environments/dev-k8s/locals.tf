@@ -16,10 +16,10 @@ locals {
 
   # Management cluster – admin credentials used only to bootstrap SA creation.
   _mgmt_kc         = yamldecode(data.terraform_remote_state.clusters.outputs.kubeconfigs["lke-dev-mgmt"])
-  mgmt_label        = data.terraform_remote_state.clusters.outputs.management_cluster.label
-  mgmt_host         = data.terraform_remote_state.clusters.outputs.management_cluster.api_endpoints[0]
-  mgmt_ca_cert      = base64decode(local._mgmt_kc.clusters[0].cluster["certificate-authority-data"])
-  mgmt_admin_token  = local._mgmt_kc.users[0].user.token
+  mgmt_label       = data.terraform_remote_state.clusters.outputs.management_cluster.label
+  mgmt_host        = data.terraform_remote_state.clusters.outputs.management_cluster.api_endpoints[0]
+  mgmt_ca_cert     = base64decode(local._mgmt_kc.clusters[0].cluster["certificate-authority-data"])
+  mgmt_admin_token = local._mgmt_kc.users[0].user.token
 
   _ateam_kc         = yamldecode(data.terraform_remote_state.clusters.outputs.kubeconfigs["lke-dev-ateam"])
   ateam_label       = data.terraform_remote_state.clusters.outputs.worker_clusters["ateam"].label

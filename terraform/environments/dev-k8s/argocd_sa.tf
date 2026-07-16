@@ -21,7 +21,7 @@ resource "kubernetes_cluster_role_v1" "argocd_mgmt" {
     resources  = ["*"]
     verbs      = ["get", "list", "watch"]
   }
-  # Write: scoped to resources created by ArgoCD's own installation manifests.
+  # Write: limited to the resource types this GitOps platform is expected to manage.
   rule {
     api_groups = [""]
     resources  = ["namespaces", "configmaps", "secrets", "serviceaccounts", "services"]

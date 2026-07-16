@@ -4,7 +4,7 @@ variable "label" {
 }
 
 variable "k8s_version" {
-  description = "Kubernetes version in major.minor format (e.g. 1.32)."
+  description = "Kubernetes version in major.minor format."
   type        = string
 }
 
@@ -47,8 +47,8 @@ variable "team" {
 variable "node_pools" {
   description = "Node pool definitions for the cluster."
   type = list(object({
-    type  = string
-    count = number
+    type   = string
+    count  = number
     labels = optional(map(string), {})
     tags   = optional(list(string), [])
     autoscaler = optional(object({

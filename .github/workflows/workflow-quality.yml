@@ -37,3 +37,32 @@ jobs:
 
       - name: Run ShellCheck
         run: shellcheck scripts/*.sh
+
+  ansible-quality:
+    name: "Lint and syntax-check Ansible"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install validation tools
+        run: python -m pip install "ansible-core~=2.18.0" "yamllint~=1.37.0"
+
+      - name: Lint Ansible YAML
+        run: >-
+          yamllint
+          -d '{extends: default, rules: {line-length: {max: 140}}}'
+          ansible
+
+      - name: Check playbook syntax
+        working-directory: ansible
+        run: >-
+          ansible-playbook
+          -i inventories/example/hosts.yml
+          --syntax-check
+          playbooks/configure-openvpn-network.yml

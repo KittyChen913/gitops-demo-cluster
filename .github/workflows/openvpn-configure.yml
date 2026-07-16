@@ -1,0 +1,174 @@
+name: "Configure OpenVPN Network"
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        type: choice
+        options: [dev, prod]
+        required: true
+        default: dev
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: openvpn-configure-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  configure:
+    name: "OpenVPN DNS and routing [${{ inputs.environment }}]"
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "~1.10"
+          terraform_wrapper: false
+
+      - name: Configure AWS Credentials
+        uses: ./.github/actions/configure-aws-credentials
+        with:
+          aws-account-id: ${{ secrets.AWS_ACCOUNT_ID }}
+          aws-region: ap-southeast-1
+
+      - name: Fetch OpenVPN Ansible Secrets
+        uses: ./.github/actions/get-ssm-parameters
+        with:
+          ssm_param_path: "/gitops/${{ inputs.environment }}/openvpn/ansible"
+
+      - name: Read OpenVPN config from Terraform state
+        working-directory: terraform/environments/${{ inputs.environment }}
+        run: |
+          terraform init \
+            -backend-config=backend.hcl \
+            -reconfigure \
+            -input=false
+
+          terraform output -json openvpn_ansible_config \
+            > "${RUNNER_TEMP}/openvpn-config.json"
+
+          jq -e '
+            type == "object" and
+            (.openvpn_host | type == "string" and length > 0) and
+            (.openvpn_ssh_user | type == "string" and length > 0) and
+            (.trusted_admin_cidrs | type == "array" and length > 0) and
+            (.upstream_dns_servers | type == "array" and length > 0)
+          ' "${RUNNER_TEMP}/openvpn-config.json" >/dev/null
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Ansible
+        run: python -m pip install "ansible-core~=2.18.0"
+
+      - name: Validate protected inputs
+        run: |
+          for REQUIRED_VAR in \
+            OPENVPN_SSH_PRIVATE_KEY_B64 \
+            OPENVPN_SSH_HOST_KEY; do
+            if [ -z "${!REQUIRED_VAR:-}" ]; then
+              echo "::error title=Missing SSM Parameter::${REQUIRED_VAR} is required"
+              exit 1
+            fi
+          done
+
+          if ! printf '%s' "${OPENVPN_SSH_PRIVATE_KEY_B64}" | base64 --decode >/dev/null; then
+            echo "::error title=Invalid SSM Parameter::OPENVPN_SSH_PRIVATE_KEY_B64 is not valid base64"
+            exit 1
+          fi
+
+          if ! grep -Eq '^ssh-ed25519 [A-Za-z0-9+/]+={0,3}$' <<< "${OPENVPN_SSH_HOST_KEY}"; then
+            echo "::error title=Invalid SSM Parameter::OPENVPN_SSH_HOST_KEY must be an Ed25519 public key"
+            exit 1
+          fi
+
+      - name: Wait for Terraform-managed SSH host key
+        run: |
+          OPENVPN_HOST=$(jq -r '.openvpn_host' "${RUNNER_TEMP}/openvpn-config.json")
+          EXPECTED_KEY="${OPENVPN_SSH_HOST_KEY}"
+
+          for ATTEMPT in $(seq 1 30); do
+            ACTUAL_KEY=$(ssh-keyscan -T 5 -t ed25519 "${OPENVPN_HOST}" 2>/dev/null \
+              | awk 'NF >= 3 { print $2 " " $3; exit }' || true)
+
+            if [ "${ACTUAL_KEY}" = "${EXPECTED_KEY}" ]; then
+              echo "Terraform-managed SSH host key is active."
+              exit 0
+            fi
+
+            echo "Waiting for cloud-init SSH host key installation (${ATTEMPT}/30)..."
+            sleep 10
+          done
+
+          echo "::error title=SSH Host Key Mismatch::VM did not present the Terraform-managed Ed25519 host key"
+          exit 1
+
+      - name: Prepare ephemeral inventory
+        run: |
+          WORK_DIR="${RUNNER_TEMP}/openvpn-ci"
+          CONFIG_FILE="${RUNNER_TEMP}/openvpn-config.json"
+          mkdir -p "${WORK_DIR}"
+
+          install -m 0600 /dev/null "${WORK_DIR}/id_openvpn"
+          printf '%s' "${OPENVPN_SSH_PRIVATE_KEY_B64}" \
+            | base64 --decode > "${WORK_DIR}/id_openvpn"
+
+          OPENVPN_HOST=$(jq -r '.openvpn_host' "${CONFIG_FILE}")
+          printf '%s %s\n' "${OPENVPN_HOST}" "${OPENVPN_SSH_HOST_KEY}" \
+            > "${WORK_DIR}/known_hosts"
+
+          jq '{
+            all: {
+              children: {
+                openvpn_servers: {
+                  hosts: {
+                    "openvpn-target": {
+                      ansible_host: .openvpn_host,
+                      ansible_user: .openvpn_ssh_user
+                    }
+                  }
+                }
+              }
+            }
+          }' "${CONFIG_FILE}" > "${WORK_DIR}/inventory.json"
+
+          jq 'del(.openvpn_host, .openvpn_ssh_user)' \
+            "${CONFIG_FILE}" > "${WORK_DIR}/vars.json"
+
+      - name: Check Ansible syntax
+        working-directory: ansible
+        run: |
+          ansible-playbook \
+            -i "${RUNNER_TEMP}/openvpn-ci/inventory.json" \
+            --extra-vars "@${RUNNER_TEMP}/openvpn-ci/vars.json" \
+            --syntax-check \
+            playbooks/configure-openvpn-network.yml
+
+      - name: Configure OpenVPN DNS and routing
+        working-directory: ansible
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: "True"
+          ANSIBLE_SSH_COMMON_ARGS: >-
+            -o UserKnownHostsFile=${{ runner.temp }}/openvpn-ci/known_hosts
+            -o HostKeyAlgorithms=ssh-ed25519
+        run: |
+          ansible-playbook \
+            -i "${RUNNER_TEMP}/openvpn-ci/inventory.json" \
+            --private-key "${RUNNER_TEMP}/openvpn-ci/id_openvpn" \
+            --extra-vars "@${RUNNER_TEMP}/openvpn-ci/vars.json" \
+            playbooks/configure-openvpn-network.yml
+
+      - name: Remove ephemeral SSH material
+        if: always()
+        run: rm -rf "${RUNNER_TEMP}/openvpn-ci"

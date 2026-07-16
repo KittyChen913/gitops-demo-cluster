@@ -54,7 +54,7 @@ variable "aws_region" {
 }
 
 variable "write_ssm_parameters" {
-  description = "Push cluster CA certificates and API endpoints to AWS SSM Parameter Store."
+  description = "Write cluster API endpoints and CA certificates to SSM; when OpenVPN is enabled, also write its generated deployment credentials."
   type        = bool
   default     = true
 }

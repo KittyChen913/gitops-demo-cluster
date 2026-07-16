@@ -1,0 +1,27 @@
+---
+- name: 安裝 dnsmasq 與 DNS 測試工具
+  ansible.builtin.apt:
+    name:
+      - dnsmasq
+      - dnsutils
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: 管理 Argo CD internal DNS 設定
+  ansible.builtin.template:
+    src: internal-argocd.conf.j2
+    dest: /etc/dnsmasq.d/internal-argocd.conf
+    owner: root
+    group: root
+    mode: "0644"
+    validate: "dnsmasq --test --conf-file=%s"
+  notify:
+    - 驗證 dnsmasq 設定
+    - 重新啟動 dnsmasq
+
+- name: 啟用 dnsmasq
+  ansible.builtin.systemd_service:
+    name: dnsmasq
+    enabled: true
+    state: started

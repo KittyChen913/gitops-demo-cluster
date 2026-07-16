@@ -1,0 +1,12 @@
+---
+- name: 驗證 dnsmasq 設定
+  ansible.builtin.command:
+    argv:
+      - dnsmasq
+      - --test
+  changed_when: false
+
+- name: 重新啟動 dnsmasq
+  ansible.builtin.systemd_service:
+    name: dnsmasq
+    state: restarted

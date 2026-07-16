@@ -1,0 +1,52 @@
+---
+- name: 讀取 Access Server ConfigDB
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/sacli
+      - ConfigQuery
+  register: openvpn_as_config_query
+  changed_when: false
+  no_log: true
+
+- name: 解析 Access Server ConfigDB
+  ansible.builtin.set_fact:
+    openvpn_as_config: "{{ openvpn_as_config_query.stdout | from_json }}"
+    openvpn_as_route_key: "vpn.server.routing.private_network.{{ openvpn_as_route_index }}"
+  no_log: true
+
+- name: 防止覆寫既有 Access Server route slot
+  ansible.builtin.assert:
+    that:
+      - >-
+        openvpn_as_route_key not in openvpn_as_config or
+        openvpn_as_config[openvpn_as_route_key] == argocd_destination_cidr
+    fail_msg: >-
+      Access Server route slot {{ openvpn_as_route_index }} 已由其他 CIDR 使用；
+      請選擇空的 openvpn_as_route_index。
+
+- name: 建立 Access Server 受管設定清單
+  ansible.builtin.set_fact:
+    openvpn_as_managed_settings:
+      vpn.client.routing.reroute_gw: "false"
+      vpn.client.routing.reroute_dns: custom
+      vpn.server.dhcp_option.dns.0: "{{ internal_dns_server_ip }}"
+      vpn.server.dhcp_option.adapter_domain_suffix: "{{ internal_domain }}"
+      vpn.server.routing.gateway_access: "true"
+      vpn.server.routing.private_access: nat
+      "{{ openvpn_as_route_key }}": "{{ argocd_destination_cidr }}"
+
+- name: 只更新有差異的 Access Server 設定
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/sacli
+      - --key
+      - "{{ item.key }}"
+      - --value
+      - "{{ item.value }}"
+      - ConfigPut
+  loop: "{{ openvpn_as_managed_settings | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  when: (openvpn_as_config.get(item.key, '') | string) != (item.value | string)
+  no_log: true
+  notify: 套用 Access Server 設定

@@ -1,0 +1,19 @@
+---
+# 此檔只包含文件用保留位址；部署時請複製至 gitignored 的 inventories/local/。
+openvpn_tunnel_cidr: 172.27.224.0/20
+openvpn_server_tunnel_ip: 172.27.224.1
+internal_dns_server_ip: 172.27.224.1
+internal_domain: corp.example
+argocd_internal_fqdn: argocd.corp.example
+argocd_endpoint_host: 192.0.2.20
+argocd_endpoint_port: 443
+argocd_destination_cidr: 192.0.2.20/32
+upstream_dns_servers:
+  - 1.1.1.1
+  - 1.0.0.1
+trusted_admin_cidrs:
+  - 198.51.100.10/32
+openvpn_port: 1194
+openvpn_protocol: udp
+openvpn_admin_port: 943
+openvpn_as_route_index: 99

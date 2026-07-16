@@ -1,0 +1,7 @@
+---
+- name: 套用 Access Server 設定
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/sacli
+      - start
+  changed_when: true

@@ -1,0 +1,137 @@
+---
+- name: 設定 Marketplace OpenVPN 的 Internal DNS 與 Argo CD split tunnel
+  hosts: openvpn_servers
+  become: true
+  gather_facts: true
+
+  pre_tasks:
+    - name: 等待 SSH 可用
+      ansible.builtin.wait_for_connection:
+        connect_timeout: 10
+        timeout: 600
+
+    - name: 等待 Access Server Web service 就緒
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ openvpn_admin_port }}"
+        timeout: 900
+
+    - name: 確認 Marketplace 安裝的是 OpenVPN Access Server
+      ansible.builtin.stat:
+        path: /usr/local/openvpn_as/scripts/sacli
+      register: openvpn_sacli
+
+    - name: 拒絕在非 Access Server 主機繼續
+      ansible.builtin.assert:
+        that:
+          - openvpn_sacli.stat.exists
+          - openvpn_sacli.stat.executable
+          - internal_dns_server_ip == openvpn_server_tunnel_ip
+          - argocd_internal_fqdn == 'argocd.' ~ internal_domain
+          - argocd_destination_cidr == argocd_endpoint_host ~ '/32'
+        fail_msg: >-
+          此 playbook 僅支援 Marketplace OpenVPN Access Server，且 network contract
+          必須與 Terraform 相同；不會 fallback 安裝 Community Edition。
+
+    - name: 確認 openvpnas service 已啟動
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - is-active
+          - openvpnas
+      changed_when: false
+
+    - name: 找出 tunnel interface
+      ansible.builtin.command:
+        argv:
+          - ip
+          - -o
+          - -4
+          - address
+          - show
+          - to
+          - "{{ internal_dns_server_ip }}/32"
+      register: openvpn_tunnel_interface_result
+      changed_when: false
+      failed_when: openvpn_tunnel_interface_result.stdout_lines | length != 1
+
+    - name: 找出 Argo CD endpoint 的 egress interface
+      ansible.builtin.command:
+        argv:
+          - ip
+          - -4
+          - route
+          - get
+          - "{{ argocd_endpoint_host }}"
+      register: openvpn_egress_route
+      changed_when: false
+
+    - name: 記錄偵測到的 interfaces
+      ansible.builtin.set_fact:
+        openvpn_tunnel_interface: "{{ openvpn_tunnel_interface_result.stdout.split()[1] }}"
+        openvpn_public_interface: "{{ openvpn_egress_route.stdout | regex_search('(?:^|\\s)dev\\s+(\\S+)', '\\1') | first }}"
+
+    - name: 確認 public 與 tunnel interface 不同
+      ansible.builtin.assert:
+        that:
+          - openvpn_tunnel_interface | length > 0
+          - openvpn_public_interface | length > 0
+          - openvpn_tunnel_interface != openvpn_public_interface
+
+    - name: 確認 Marketplace UFW 已啟用
+      ansible.builtin.command:
+        argv:
+          - ufw
+          - status
+      register: openvpn_ufw_status
+      changed_when: false
+      failed_when: "'Status: active' not in openvpn_ufw_status.stdout"
+
+  roles:
+    - role: vpn_routing
+    - role: dnsmasq
+    - role: openvpn_access_server
+    - role: host_firewall
+
+  post_tasks:
+    - name: 立即執行所有 handlers
+      ansible.builtin.meta: flush_handlers
+
+    - name: 驗證 Access Server 狀態
+      ansible.builtin.command:
+        argv:
+          - /usr/local/openvpn_as/scripts/sacli
+          - status
+      changed_when: false
+
+    - name: 驗證 dnsmasq 完整設定
+      ansible.builtin.command:
+        argv:
+          - dnsmasq
+          - --test
+      changed_when: false
+
+    - name: 驗證 internal record
+      ansible.builtin.command:
+        argv:
+          - dig
+          - "@{{ internal_dns_server_ip }}"
+          - "{{ argocd_internal_fqdn }}"
+          - +short
+      register: internal_dns_result
+      changed_when: false
+      failed_when: internal_dns_result.stdout_lines != [argocd_endpoint_host]
+
+    - name: 取得 DNS listeners
+      ansible.builtin.command:
+        argv:
+          - ss
+          - -lntup
+      register: openvpn_listeners
+      changed_when: false
+
+    - name: 拒絕 wildcard DNS listener
+      ansible.builtin.assert:
+        that:
+          - openvpn_listeners.stdout is not regex('(?m)(0\\.0\\.0\\.0|\\[::\\]|\\*):53\\b')
+        fail_msg: "DNS 正在 wildcard address 上監聽；已停止部署。"

@@ -1,0 +1,16 @@
+---
+- name: 啟用 IPv4 forwarding
+  ansible.builtin.template:
+    src: 99-openvpn-forwarding.conf.j2
+    dest: /etc/sysctl.d/99-openvpn-forwarding.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: 套用 IPv4 forwarding
+
+- name: 確認使用 Access Server 的 NAT 模式
+  ansible.builtin.debug:
+    msg: >-
+      Argo CD 使用 Access Server 原生 NAT；backend 看到 OpenVPN Linode public IPv4。
+      本 role 不建立第二套 iptables/nftables SNAT chain。
+    verbosity: 1

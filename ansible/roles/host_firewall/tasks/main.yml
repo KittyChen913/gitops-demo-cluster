@@ -1,0 +1,133 @@
+---
+- name: 移除 Marketplace 過度寬鬆的 public TCP 規則
+  ansible.builtin.command:
+    argv:
+      - ufw
+      - --force
+      - delete
+      - allow
+      - "{{ item }}/tcp"
+  loop:
+    - "22"
+    - "80"
+    - "443"
+    - "943"
+    - "945"
+  register: openvpn_ufw_delete
+  changed_when: openvpn_ufw_delete.rc == 0
+  failed_when: false
+  notify: 重新載入 UFW
+
+- name: 只允許可信來源 SSH
+  ansible.builtin.command:
+    argv:
+      - ufw
+      - allow
+      - from
+      - "{{ item }}"
+      - to
+      - any
+      - port
+      - "22"
+      - proto
+      - tcp
+  loop: "{{ trusted_admin_cidrs }}"
+  register: openvpn_ufw_ssh
+  changed_when: "'Skipping adding existing rule' not in openvpn_ufw_ssh.stdout"
+  notify: 重新載入 UFW
+
+- name: 只允許可信來源存取 Access Server Admin UI
+  ansible.builtin.command:
+    argv:
+      - ufw
+      - allow
+      - from
+      - "{{ item }}"
+      - to
+      - any
+      - port
+      - "{{ openvpn_admin_port }}"
+      - proto
+      - tcp
+  loop: "{{ trusted_admin_cidrs }}"
+  register: openvpn_ufw_admin
+  changed_when: "'Skipping adding existing rule' not in openvpn_ufw_admin.stdout"
+  notify: 重新載入 UFW
+
+- name: 允許 public OpenVPN listener
+  ansible.builtin.command:
+    argv:
+      - ufw
+      - allow
+      - "{{ openvpn_port }}/{{ openvpn_protocol }}"
+  register: openvpn_ufw_listener
+  changed_when: "'Skipping adding existing rule' not in openvpn_ufw_listener.stdout"
+  notify: 重新載入 UFW
+
+- name: 允許 VPN client 查詢 tunnel DNS
+  ansible.builtin.command:
+    argv:
+      - ufw
+      - allow
+      - in
+      - "on"
+      - "{{ openvpn_tunnel_interface }}"
+      - from
+      - "{{ openvpn_tunnel_cidr }}"
+      - to
+      - "{{ internal_dns_server_ip }}"
+      - port
+      - "53"
+      - proto
+      - "{{ item }}"
+  loop:
+    - udp
+    - tcp
+  register: openvpn_ufw_dns_allow
+  changed_when: "'Skipping adding existing rule' not in openvpn_ufw_dns_allow.stdout"
+  notify: 重新載入 UFW
+
+- name: 明確拒絕 public interface DNS
+  ansible.builtin.command:
+    argv:
+      - ufw
+      - deny
+      - in
+      - "on"
+      - "{{ openvpn_public_interface }}"
+      - to
+      - any
+      - port
+      - "53"
+      - proto
+      - "{{ item }}"
+  loop:
+    - udp
+    - tcp
+  register: openvpn_ufw_dns_deny
+  changed_when: "'Skipping adding existing rule' not in openvpn_ufw_dns_deny.stdout"
+  notify: 重新載入 UFW
+
+- name: 允許 VPN client forward 到 Argo CD endpoint
+  ansible.builtin.command:
+    argv:
+      - ufw
+      - route
+      - allow
+      - in
+      - "on"
+      - "{{ openvpn_tunnel_interface }}"
+      - out
+      - "on"
+      - "{{ openvpn_public_interface }}"
+      - from
+      - "{{ openvpn_tunnel_cidr }}"
+      - to
+      - "{{ argocd_endpoint_host }}"
+      - port
+      - "{{ argocd_endpoint_port }}"
+      - proto
+      - tcp
+  register: openvpn_ufw_forward
+  changed_when: "'Skipping adding existing rule' not in openvpn_ufw_forward.stdout"
+  notify: 重新載入 UFW

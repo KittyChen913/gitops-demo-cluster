@@ -1,0 +1,17 @@
+# 由 gitops-demo-cluster Ansible 管理，請勿手動編輯。
+port=53
+bind-dynamic
+interface=lo
+interface={{ openvpn_tunnel_interface }}
+except-interface={{ openvpn_public_interface }}
+listen-address=127.0.0.1
+listen-address={{ internal_dns_server_ip }}
+no-dhcp-interface=*
+domain-needed
+bogus-priv
+no-resolv
+{% for upstream_dns_server in upstream_dns_servers %}
+server={{ upstream_dns_server }}
+{% endfor %}
+local=/{{ internal_domain }}/
+host-record={{ argocd_internal_fqdn }},{{ argocd_endpoint_host }}

@@ -1,14 +1,14 @@
 # =============================================================================
 # _cluster-validate.yml — 可復用 Cluster 驗證
 # =============================================================================
-# 呼叫者: cluster-post-provision.yml, cluster-health-check.yml
+# 呼叫者: cluster-post-provision.yml
 #
 # 對環境中所有 cluster 執行完整驗證流程：
 #   Step 1 — check-cluster-health.sh     ：API server、節點、系統 pod
 #   Step 2 — verify-sa-rbac.sh           ：SA / ClusterRole / ClusterRoleBinding
 #   Step 3 — validate-cluster-readiness.sh ：端對端 SA token + 權限
 #
-# 每個步驟對所有 cluster（mgmt + workers）平行執行。
+# 三個 job 依序執行；每個 job 內逐一驗證所有 cluster（mgmt + workers）。
 # 需要 Phase 2 已完全 apply（SA token 必須存在於 SSM）。
 #
 # 安全性：

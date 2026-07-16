@@ -24,24 +24,24 @@
 #   ✓  paths-ignore — tag 觸發不需要（僅有標記的提交才會到生產）
 #
 # 稽核設計：
-#   每次生產部署都跟一個不可變更的 git tag 和
-#   GitHub Environment 批准記錄連結，滿足變更管理稽核要求。
+#   tag 部署連結不可變更的 git tag；手動部署使用 manual-dispatch-<run_number>。
+#   兩種路徑都保留 GitHub run 與 Environment 批准記錄。
 #
 # 執行順序：
 #   ┌─────────────────────────────────────────────────────────────────┐
 #   │  [Quality Gate] workflow-quality.yml                             │
-#   │  actionlint + ShellCheck                                         │
+#   │  actionlint + ShellCheck + Ansible lint/syntax                   │
 #   ├─────────────────────────────────────────────────────────────────┤
 #   │  [Bootstrap] bootstrap-backend                                  │
 #   │  AWS S3 bucket（版本控制 + 加密 + 封鎖公開存取）              │
 #   ├─────────────────────────────────────────────────────────────────┤
 #   │  [Phase 1] apply-clusters                                       │
-#   │  terraform/environments/prod → 建立 LKE cluster             │
-#   │  寫入: SSM api-endpoint, ca-cert                              │
+#   │  terraform/environments/prod → 建立 LKE 與選用 OpenVPN         │
+#   │  寫入: SSM cluster metadata 與選用 OpenVPN deployment material │
 #   ├─────────────────────────────────────────────────────────────────┤
 #   │  [Phase 2] apply-k8s          （needs: apply-clusters）          │
 #   │  terraform/environments/prod-k8s → ArgoCD SA/RBAC/Token        │
-#   │  讀取: 由 S3 bridge 下載的 Phase 1 state                  │
+#   │  讀取: S3 backend 中的 Phase 1 remote state                    │
 #   │  寫入: SSM token（SecureString）                               │
 #   ├─────────────────────────────────────────────────────────────────┤
 #   │  [Post-Provision] cluster-post-provision.yml（workflow_call）    │
@@ -61,8 +61,8 @@ name: "Terraform Apply — Production"
 
 on:
   # ── 主要觸發：明確的 semantic version 發佈 tag ──────────────────────────────────
-  # 僅文件提交不會到達生產，因為它們永遠不會被打上 v* tag。
-  # tag 觸發不需要額外的 paths-ignore。
+  # tag 觸發不評估檔案路徑；任何指向 master 歷史的有效 v* tag 都會啟動流程。
+  # 因此不設定 paths-ignore，並由 SemVer/master preflight 與 prod approval 把關。
   push:
     tags:
       - "v*"
@@ -168,7 +168,7 @@ jobs:
     with:
       environment: prod
 
-  # ── Phase 1：建立 LKE Cluster ───────────────────────────────────────────────
+  # ── Phase 1：建立 LKE Cluster 與選用 OpenVPN ────────────────────────────────
   # 注意: _tf-apply.yml 內部設定 `environment: prod`，執行前觸發手動批准門戳。
   apply-clusters:
     name: "Phase 1 — Apply Clusters [prod]"
@@ -227,7 +227,7 @@ jobs:
             echo ""
             echo "| Stage | Job | Status |"
             echo "|-------|-----|--------|"
-            echo "| Quality | actionlint + ShellCheck | ${{ needs.quality.result }} |"
+            echo "| Quality | actionlint + ShellCheck + Ansible checks | ${{ needs.quality.result }} |"
             echo "| Pre-flight | Validate OIDC prerequisites | ${{ needs.preflight.result }} |"
             echo "| Bootstrap | S3 bucket (native locking) | ${{ needs.bootstrap-backend.result }} |"
             echo "| Phase 1 | Apply clusters | ${{ needs.apply-clusters.result }} |"

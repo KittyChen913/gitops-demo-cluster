@@ -2,9 +2,9 @@
 # terraform-plan.yml — Terraform Plan 主流程（PR gate check）
 # =============================================================================
 #
-# 對所有觸及 terraform/ 文件的 Pull Request 觸發。
-# 對所有受影響的環境執行 terraform plan。
-# 結果會發佈為 PR step summary 與註解。
+# 對所有送往 master 的 Pull Request 觸發；只有 Terraform 或相關 plan/composite
+# action 路徑有變更時，才對受影響環境執行 terraform plan。
+# 結果會發佈至 GitHub Actions step summary；此 workflow 不建立 PR comment。
 #
 # 執行矩陣：
 #   dev/clusters  — terraform/environments/dev/**
@@ -16,7 +16,7 @@
 #
 # PR 永遠不會觸發 terraform apply。
 #
-# 僅 terraform/ 內的變更觸發 plan；文件類（md、docs/）不觸發。
+# 無關變更仍會完成 Plan Gate，但不執行環境 plan；文件類（md、docs/）屬此情況。
 # =============================================================================
 
 name: "Terraform Plan"

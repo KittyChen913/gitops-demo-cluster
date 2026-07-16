@@ -6,7 +6,7 @@
 # 對一個環境中所有 cluster 執行 check-cluster-health.sh。
 #
 # 與完整 post-provision pipeline 不同，此工作流程：
-#   - 僅執行健康檢查（不驗證 SA/RBAC，不匯出 S3）
+#   - 僅執行健康檢查（不驗證 SA/RBAC 或 readiness）
 #   - 可指定對象為特定 cluster 或環境內所有 cluster
 #   - 可排程執行以定期監控
 #

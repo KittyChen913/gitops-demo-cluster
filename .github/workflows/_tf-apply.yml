@@ -1,10 +1,10 @@
 # =============================================================================
 # _tf-apply.yml — 可重用 Terraform Apply
 # =============================================================================
-# 呼叫者: terraform-apply-dev.yml
+# 呼叫者: terraform-apply-dev.yml, terraform-apply-prod.yml
 #
 # 執行內容：
-#   1. 動態配置 S3 backend
+#   1. 以各環境提交的 backend.tf + backend.hcl 初始化 S3 backend
 #   2. Phase 2 透過 S3 terraform_remote_state 讀取 Phase 1 state
 #   3. terraform init → plan → apply（自動批准）
 #   4. 輸出 apply 後摘要

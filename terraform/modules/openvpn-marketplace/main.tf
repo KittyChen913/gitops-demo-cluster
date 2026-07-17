@@ -8,9 +8,17 @@ locals {
   )
 }
 
-resource "linode_instance" "openvpn" {
-  count = var.enabled ? 1 : 0
+moved {
+  from = linode_instance.openvpn[0]
+  to   = linode_instance.openvpn
+}
 
+moved {
+  from = linode_firewall.openvpn[0]
+  to   = linode_firewall.openvpn
+}
+
+resource "linode_instance" "openvpn" {
   label  = var.label
   region = var.region
   type   = var.instance_type
@@ -20,7 +28,7 @@ resource "linode_instance" "openvpn" {
   stackscript_id   = var.stackscript_id
   stackscript_data = local.marketplace_stackscript_data
   authorized_keys  = [var.ssh_public_key]
-  firewall_id      = linode_firewall.openvpn[0].id
+  firewall_id      = linode_firewall.openvpn.id
   tags             = var.tags
 
   metadata {
@@ -50,8 +58,6 @@ resource "linode_instance" "openvpn" {
 }
 
 resource "linode_firewall" "openvpn" {
-  count = var.enabled ? 1 : 0
-
   label           = "${var.label}-firewall"
   inbound_policy  = "DROP"
   outbound_policy = "ACCEPT"
@@ -79,21 +85,29 @@ resource "linode_firewall" "openvpn" {
     }
   }
 
-  inbound {
-    label    = "allow-ssh-from-trusted-admins"
-    action   = "ACCEPT"
-    protocol = "TCP"
-    ports    = "22"
-    ipv4     = [for cidr in var.trusted_admin_cidrs : cidr if !strcontains(cidr, ":")]
-    ipv6     = [for cidr in var.trusted_admin_cidrs : cidr if strcontains(cidr, ":")]
+  dynamic "inbound" {
+    for_each = length(var.trusted_admin_cidrs) > 0 ? [1] : []
+
+    content {
+      label    = "allow-ssh-from-trusted-admins"
+      action   = "ACCEPT"
+      protocol = "TCP"
+      ports    = "22"
+      ipv4     = [for cidr in var.trusted_admin_cidrs : cidr if !strcontains(cidr, ":")]
+      ipv6     = [for cidr in var.trusted_admin_cidrs : cidr if strcontains(cidr, ":")]
+    }
   }
 
-  inbound {
-    label    = "allow-access-server-admin"
-    action   = "ACCEPT"
-    protocol = "TCP"
-    ports    = tostring(var.admin_port)
-    ipv4     = [for cidr in var.trusted_admin_cidrs : cidr if !strcontains(cidr, ":")]
-    ipv6     = [for cidr in var.trusted_admin_cidrs : cidr if strcontains(cidr, ":")]
+  dynamic "inbound" {
+    for_each = length(var.trusted_admin_cidrs) > 0 ? [1] : []
+
+    content {
+      label    = "allow-access-server-admin"
+      action   = "ACCEPT"
+      protocol = "TCP"
+      ports    = tostring(var.admin_port)
+      ipv4     = [for cidr in var.trusted_admin_cidrs : cidr if !strcontains(cidr, ":")]
+      ipv6     = [for cidr in var.trusted_admin_cidrs : cidr if strcontains(cidr, ":")]
+    }
   }
 }

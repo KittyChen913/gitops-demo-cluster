@@ -15,7 +15,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: openvpn-configure-${{ inputs.environment }}
+  # 與同環境 Terraform apply 共用 group，避免 Firewall state 同時變更。
+  group: tf-apply-${{ inputs.environment }}
   cancel-in-progress: false
 
 jobs:
@@ -40,10 +41,27 @@ jobs:
           aws-account-id: ${{ secrets.AWS_ACCOUNT_ID }}
           aws-region: ap-southeast-1
 
+      - name: Fetch Linode Provider Token
+        uses: ./.github/actions/get-ssm-parameters
+        with:
+          ssm_param_path: "/gitops/shared"
+
+      - name: Validate OpenVPN Contact Email
+        run: |
+          if [[ ! "${OPENVPN_CONTACT_EMAIL:-}" =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ ]]; then
+            echo "::error title=Missing Parameter::SSM parameter /gitops/shared/OPENVPN_CONTACT_EMAIL is missing or invalid"
+            exit 1
+          fi
+
       - name: Fetch OpenVPN Ansible Secrets
         uses: ./.github/actions/get-ssm-parameters
         with:
           ssm_param_path: "/gitops/${{ inputs.environment }}/openvpn/ansible"
+
+      - name: Fetch Management Cluster Credentials
+        uses: ./.github/actions/get-ssm-parameters
+        with:
+          ssm_param_path: "/gitops/${{ inputs.environment }}/clusters/lke-${{ inputs.environment }}-mgmt"
 
       - name: Read OpenVPN config from Terraform state
         working-directory: terraform/environments/${{ inputs.environment }}
@@ -60,14 +78,121 @@ jobs:
             type == "object" and
             (.openvpn_host | type == "string" and length > 0) and
             (.openvpn_ssh_user | type == "string" and length > 0) and
-            (.trusted_admin_cidrs | type == "array" and length > 0) and
             (.upstream_dns_servers | type == "array" and length > 0)
           ' "${RUNNER_TEMP}/openvpn-config.json" >/dev/null
+
+      - name: Resolve Runner Public IPv4
+        id: runner-ip
+        working-directory: .
+        run: |
+          RUNNER_IP=$(bash "${GITHUB_WORKSPACE}/scripts/discover-runner-public-ip.sh")
+          echo "::add-mask::${RUNNER_IP}"
+          echo "trusted_admin_cidrs=[\"${RUNNER_IP}/32\"]" >> "$GITHUB_OUTPUT"
+
+      - name: Open Temporary Runner Management Access
+        id: open-runner-access
+        working-directory: terraform/environments/${{ inputs.environment }}
+        env:
+          TF_VAR_linode_token: ${{ env.LINODE_TOKEN }}
+          TF_VAR_write_kubeconfig_files: "false"
+          TF_VAR_openvpn_contact_email: ${{ env.OPENVPN_CONTACT_EMAIL }}
+          TF_VAR_openvpn_bootstrap_http_enabled: "false"
+          TF_VAR_trusted_admin_cidrs: ${{ steps.runner-ip.outputs.trusted_admin_cidrs }}
+        run: |
+          set +e
+          terraform plan \
+            -input=false \
+            -detailed-exitcode \
+            -target='module.openvpn.linode_firewall.openvpn' \
+            -out=openvpn-runner-access.tfplan \
+            > openvpn-runner-access-plan.log 2>&1
+          PLAN_EXIT=$?
+          set -e
+
+          grep -v -iE "^\s*(token|secret|pass[w]ord)\s*=" \
+            openvpn-runner-access-plan.log || true
+
+          case "${PLAN_EXIT}" in
+            0)
+              echo "runner 管理白名單已存在。"
+              ;;
+            2)
+              terraform apply \
+                -input=false \
+                -auto-approve \
+                openvpn-runner-access.tfplan \
+                > openvpn-runner-access-apply.log 2>&1
+              grep -v -iE "^\s*(token|secret|pass[w]ord)\s*=" \
+                openvpn-runner-access-apply.log || true
+              ;;
+            *)
+              echo "::error title=Runner Access Failed::無法產生臨時管理白名單 plan"
+              exit 1
+              ;;
+          esac
 
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v5
+        with:
+          version: "v1.35.0"
+
+      - name: Discover Argo CD Private Endpoint
+        run: |
+          : "${API_ENDPOINT:?Management Cluster API endpoint is required}"
+          : "${CA_CERT:?Management Cluster CA certificate is required}"
+          : "${TOKEN:?Management Cluster token is required}"
+
+          KUBECONFIG_FILE="${RUNNER_TEMP}/openvpn-mgmt-kubeconfig"
+          umask 077
+          cat > "${KUBECONFIG_FILE}" <<KUBECONFIG_EOF
+          apiVersion: v1
+          kind: Config
+          clusters:
+          - name: management
+            cluster:
+              server: ${API_ENDPOINT}
+              certificate-authority-data: ${CA_CERT}
+          contexts:
+          - name: management
+            context:
+              cluster: management
+              user: argocd-manager
+          current-context: management
+          users:
+          - name: argocd-manager
+            user:
+              token: ${TOKEN}
+          KUBECONFIG_EOF
+
+          ARGOCD_ENDPOINT=$(KUBECONFIG="${KUBECONFIG_FILE}" kubectl \
+            --request-timeout=15s \
+            -n argocd \
+            get service argocd-server-private \
+            -o json \
+            | jq -r '.status.loadBalancer.ingress[]?.ip // empty' \
+            | head -1)
+
+          if ! python -c \
+            'import ipaddress, sys; address = ipaddress.ip_address(sys.argv[1]); sys.exit(0 if address.version == 4 else 1)' \
+            "${ARGOCD_ENDPOINT}"; then
+            echo "::error title=Argo CD Endpoint Missing::argocd-server-private 尚未取得有效 IPv4"
+            exit 1
+          fi
+
+          CONFIG_FILE="${RUNNER_TEMP}/openvpn-config.json"
+          jq \
+            --arg endpoint "${ARGOCD_ENDPOINT}" \
+            '. + {
+              argocd_endpoint_host: $endpoint,
+              argocd_destination_cidr: ($endpoint + "/32")
+            }' \
+            "${CONFIG_FILE}" > "${CONFIG_FILE}.tmp"
+          mv "${CONFIG_FILE}.tmp" "${CONFIG_FILE}"
 
       - name: Install Ansible
         run: python -m pip install "ansible-core~=2.18.0"
@@ -169,6 +294,68 @@ jobs:
             --extra-vars "@${RUNNER_TEMP}/openvpn-ci/vars.json" \
             playbooks/configure-openvpn-network.yml
 
+      - name: Close Temporary Runner Management Access
+        if: always()
+        working-directory: terraform/environments/${{ inputs.environment }}
+        env:
+          TF_VAR_linode_token: ${{ env.LINODE_TOKEN }}
+          TF_VAR_write_kubeconfig_files: "false"
+          TF_VAR_openvpn_contact_email: ${{ env.OPENVPN_CONTACT_EMAIL }}
+          TF_VAR_openvpn_bootstrap_http_enabled: "false"
+          TF_VAR_trusted_admin_cidrs: "[]"
+        run: |
+          set +e
+          STATE_LIST=$(terraform state list 2>openvpn-runner-cleanup-state.err)
+          STATE_EXIT=$?
+          set -e
+
+          if [ "${STATE_EXIT}" -ne 0 ]; then
+            cat openvpn-runner-cleanup-state.err
+            echo "::error title=Runner Access Cleanup Failed::無法讀取 Terraform state，拒絕略過 runner 白名單 cleanup"
+            exit "${STATE_EXIT}"
+          fi
+
+          if ! grep -Eq '^module\.openvpn\.linode_firewall\.openvpn(\[0\])?$' \
+            <<< "${STATE_LIST}"; then
+            echo "OpenVPN Firewall 不在 Terraform state，無需移除 runner 白名單。"
+            exit 0
+          fi
+
+          set +e
+          terraform plan \
+            -input=false \
+            -detailed-exitcode \
+            -target='module.openvpn.linode_firewall.openvpn' \
+            -out=openvpn-runner-cleanup.tfplan \
+            > openvpn-runner-cleanup-plan.log 2>&1
+          PLAN_EXIT=$?
+          set -e
+
+          grep -v -iE "^\s*(token|secret|pass[w]ord)\s*=" \
+            openvpn-runner-cleanup-plan.log || true
+
+          case "${PLAN_EXIT}" in
+            0)
+              echo "runner 管理白名單已移除。"
+              ;;
+            2)
+              terraform apply \
+                -input=false \
+                -auto-approve \
+                openvpn-runner-cleanup.tfplan \
+                > openvpn-runner-cleanup-apply.log 2>&1
+              grep -v -iE "^\s*(token|secret|pass[w]ord)\s*=" \
+                openvpn-runner-cleanup-apply.log || true
+              ;;
+            *)
+              echo "::error title=Runner Access Cleanup Failed::無法產生 runner 白名單 cleanup plan"
+              exit 1
+              ;;
+          esac
+
       - name: Remove ephemeral SSH material
         if: always()
-        run: rm -rf "${RUNNER_TEMP}/openvpn-ci"
+        run: |
+          rm -rf "${RUNNER_TEMP}/openvpn-ci"
+          rm -f "${RUNNER_TEMP}/openvpn-config.json"
+          rm -f "${RUNNER_TEMP}/openvpn-mgmt-kubeconfig"

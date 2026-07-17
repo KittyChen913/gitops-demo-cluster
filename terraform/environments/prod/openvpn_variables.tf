@@ -1,9 +1,3 @@
-variable "openvpn_enabled" {
-  description = "是否建立 prod Marketplace OpenVPN Server。預設關閉，避免未啟用環境產生額外資源與費用。"
-  type        = bool
-  default     = false
-}
-
 variable "openvpn_server_label" {
   description = "OpenVPN Linode label。"
   type        = string
@@ -16,50 +10,38 @@ variable "openvpn_instance_type" {
   default     = "g6-standard-1"
 }
 
-variable "openvpn_image" {
-  description = "Marketplace OpenVPN StackScript 支援的 image。"
-  type        = string
-  default     = "linode/ubuntu24.04"
-}
-
 variable "openvpn_stackscript_id" {
   description = "OpenVPN One-Click StackScript ID；部署前須以 Linode API 重新驗證。"
   type        = number
   default     = 401719
 }
 
-variable "openvpn_stackscript_data" {
-  description = "非機密 Marketplace UDF；只允許 user_name、disable_root、soa_email_address 與 add_ons。"
-  type        = map(string)
-  default     = {}
+variable "openvpn_admin_username" {
+  description = "Marketplace 建立的受限 sudo 使用者名稱。"
+  type        = string
+  default     = "vpnadmin"
+
+  validation {
+    condition     = can(regex("^[a-z_][a-z0-9_-]{0,31}$", var.openvpn_admin_username))
+    error_message = "openvpn_admin_username 必須是有效的小寫 Linux 使用者名稱。"
+  }
+}
+
+variable "openvpn_contact_email" {
+  description = "Marketplace Let's Encrypt bootstrap 使用的聯絡信箱；CI 從 SSM /gitops/shared/OPENVPN_CONTACT_EMAIL 注入。"
+  type        = string
+  sensitive   = true
+
+  validation {
+    condition     = can(regex("^[^@[:space:]]+@[^@[:space:]]+\\.[^@[:space:]]+$", var.openvpn_contact_email))
+    error_message = "openvpn_contact_email 必須是有效的 email address。"
+  }
 }
 
 variable "openvpn_tags" {
   description = "OpenVPN Linode 與 Firewall tags。"
   type        = list(string)
   default     = ["gitops-demo", "prod", "openvpn"]
-}
-
-variable "openvpn_port" {
-  description = "OpenVPN client listener port；目前 Marketplace contract 固定為 UDP/1194。"
-  type        = number
-  default     = 1194
-
-  validation {
-    condition     = var.openvpn_port == 1194
-    error_message = "目前 openvpn_port 必須是 1194；變更前需同步實作 Access Server sacli listener 設定。"
-  }
-}
-
-variable "openvpn_protocol" {
-  description = "OpenVPN client listener protocol；目前 Marketplace contract 固定為 udp。"
-  type        = string
-  default     = "udp"
-
-  validation {
-    condition     = var.openvpn_protocol == "udp"
-    error_message = "目前 openvpn_protocol 必須是 udp；尚未實作 TCP listener 的 sacli 設定。"
-  }
 }
 
 variable "openvpn_enable_ipv6" {
@@ -81,24 +63,13 @@ variable "openvpn_admin_port" {
 }
 
 variable "openvpn_tunnel_cidr" {
-  description = "Access Server 目前配置的 VPN client IPv4 CIDR；Ansible 只驗證，不改寫 core VPN subnet。"
+  description = "Access Server VPN client IPv4 CIDR；採用官方預設位址池。"
   type        = string
-  default     = ""
+  default     = "172.27.224.0/20"
 
   validation {
-    condition     = !var.openvpn_enabled || can(cidrnetmask(var.openvpn_tunnel_cidr))
-    error_message = "啟用 OpenVPN 時，openvpn_tunnel_cidr 必須是有效 IPv4 CIDR。"
-  }
-}
-
-variable "openvpn_server_tunnel_ip" {
-  description = "Access Server tunnel interface IPv4，也是 dnsmasq 的 VPN-only listener。"
-  type        = string
-  default     = ""
-
-  validation {
-    condition     = !var.openvpn_enabled || can(cidrnetmask("${var.openvpn_server_tunnel_ip}/32"))
-    error_message = "啟用 OpenVPN 時，openvpn_server_tunnel_ip 必須是未帶 CIDR suffix 的 IPv4。"
+    condition     = can(cidrnetmask(var.openvpn_tunnel_cidr))
+    error_message = "openvpn_tunnel_cidr 必須是有效 IPv4 CIDR。"
   }
 }
 
@@ -116,44 +87,11 @@ variable "openvpn_public_ipv4" {
 variable "internal_domain" {
   description = "VPN-only DNS zone。"
   type        = string
-  default     = ""
+  default     = "prod.gitops.internal"
 
   validation {
-    condition     = !var.openvpn_enabled || can(regex("^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$", var.internal_domain))
-    error_message = "啟用 OpenVPN 時，internal_domain 必須是小寫 FQDN。"
-  }
-}
-
-variable "internal_dns_server_ip" {
-  description = "dnsmasq 的 VPN-only IPv4 listener。"
-  type        = string
-  default     = ""
-
-  validation {
-    condition     = !var.openvpn_enabled || can(cidrnetmask("${var.internal_dns_server_ip}/32"))
-    error_message = "啟用 OpenVPN 時，internal_dns_server_ip 必須是未帶 CIDR suffix 的 IPv4。"
-  }
-}
-
-variable "argocd_internal_fqdn" {
-  description = "VPN client 使用的 Argo CD internal FQDN。"
-  type        = string
-  default     = ""
-
-  validation {
-    condition     = !var.openvpn_enabled || can(regex("^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$", var.argocd_internal_fqdn))
-    error_message = "啟用 OpenVPN 時，argocd_internal_fqdn 必須是小寫 FQDN。"
-  }
-}
-
-variable "argocd_endpoint_host" {
-  description = "受 Cloud Firewall 限制的 Argo CD NodeBalancer IPv4。"
-  type        = string
-  default     = ""
-
-  validation {
-    condition     = !var.openvpn_enabled || can(cidrnetmask("${var.argocd_endpoint_host}/32"))
-    error_message = "啟用 OpenVPN 時，argocd_endpoint_host 必須是未帶 CIDR suffix 的 IPv4。"
+    condition     = can(regex("^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$", var.internal_domain))
+    error_message = "internal_domain 必須是小寫 FQDN。"
   }
 }
 
@@ -168,29 +106,16 @@ variable "argocd_endpoint_port" {
   }
 }
 
-variable "argocd_destination_cidr" {
-  description = "Access Server 推送的 Argo CD split-tunnel route；必須等於 argocd_endpoint_host/32。"
-  type        = string
-  default     = ""
-
-  validation {
-    condition     = !var.openvpn_enabled || can(cidrnetmask(var.argocd_destination_cidr))
-    error_message = "啟用 OpenVPN 時，argocd_destination_cidr 必須是有效 IPv4 CIDR。"
-  }
-}
-
 variable "trusted_admin_cidrs" {
-  description = "允許 SSH 與 Access Server Admin UI 的可信來源 CIDR。"
+  description = "僅供 workflow 暫時注入 GitHub runner /32；穩態必須為空，請勿寫入 terraform.tfvars。"
   type        = list(string)
   default     = []
 
   validation {
-    condition = !var.openvpn_enabled || (
-      length(var.trusted_admin_cidrs) > 0 && alltrue([
-        for cidr in var.trusted_admin_cidrs : can(cidrhost(cidr, 0)) && !contains(["0.0.0.0/0", "::/0"], cidr)
-      ])
-    )
-    error_message = "啟用 OpenVPN 時，trusted_admin_cidrs 必須包含至少一個有效且非全開的 CIDR。"
+    condition = alltrue([
+      for cidr in var.trusted_admin_cidrs : can(cidrhost(cidr, 0)) && !contains(["0.0.0.0/0", "::/0"], cidr)
+    ])
+    error_message = "trusted_admin_cidrs 只能包含有效且非全開的 CIDR。"
   }
 }
 

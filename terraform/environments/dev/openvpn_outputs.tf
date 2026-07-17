@@ -22,39 +22,36 @@ output "openvpn_ssh_target" {
   description = "OpenVPN SSH target；不含 private key 或 password。"
   value = module.openvpn.public_ipv4 == null ? null : format(
     "%s@%s",
-    lookup(var.openvpn_stackscript_data, "user_name", "root"),
+    var.openvpn_admin_username,
     module.openvpn.public_ipv4,
   )
 }
 
 output "internal_dns_server_ip" {
   description = "VPN client 使用的 internal DNS server。"
-  value       = var.openvpn_enabled ? var.internal_dns_server_ip : null
+  value       = local.internal_dns_server_ip
 }
 
 output "argocd_internal_fqdn" {
   description = "VPN-only Argo CD FQDN。"
-  value       = var.openvpn_enabled ? var.argocd_internal_fqdn : null
+  value       = local.argocd_internal_fqdn
 }
 
 output "openvpn_ansible_config" {
   description = "Ansible 所需的非機密 OpenVPN desired state；CI 直接從 Terraform state 讀取。"
-  value = var.openvpn_enabled ? {
+  value = {
     openvpn_host             = module.openvpn.public_ipv4
-    openvpn_ssh_user         = lookup(var.openvpn_stackscript_data, "user_name", "root")
+    openvpn_ssh_user         = var.openvpn_admin_username
     openvpn_tunnel_cidr      = var.openvpn_tunnel_cidr
-    openvpn_server_tunnel_ip = var.openvpn_server_tunnel_ip
-    internal_dns_server_ip   = var.internal_dns_server_ip
+    openvpn_server_tunnel_ip = local.openvpn_server_tunnel_ip
+    internal_dns_server_ip   = local.internal_dns_server_ip
     internal_domain          = var.internal_domain
-    argocd_internal_fqdn     = var.argocd_internal_fqdn
-    argocd_endpoint_host     = var.argocd_endpoint_host
+    argocd_internal_fqdn     = local.argocd_internal_fqdn
     argocd_endpoint_port     = var.argocd_endpoint_port
-    argocd_destination_cidr  = var.argocd_destination_cidr
     upstream_dns_servers     = var.upstream_dns_servers
-    trusted_admin_cidrs      = var.trusted_admin_cidrs
-    openvpn_port             = var.openvpn_port
-    openvpn_protocol         = var.openvpn_protocol
+    openvpn_port             = module.openvpn.openvpn_port
+    openvpn_protocol         = module.openvpn.openvpn_protocol
     openvpn_admin_port       = var.openvpn_admin_port
     openvpn_as_route_index   = var.openvpn_as_route_index
-  } : null
+  }
 }

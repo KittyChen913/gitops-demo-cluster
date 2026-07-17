@@ -1,9 +1,3 @@
-variable "enabled" {
-  description = "是否建立此環境的 Marketplace OpenVPN Server。"
-  type        = bool
-  default     = false
-}
-
 variable "label" {
   description = "OpenVPN Linode label。"
   type        = string
@@ -51,6 +45,7 @@ variable "stackscript_data" {
   description = "Marketplace UDF。必須提供 user_name 與 soa_email_address；不得提供 API token 或 public DNS 欄位。"
   type        = map(string)
   default     = {}
+  sensitive   = true
 
   validation {
     condition = alltrue([
@@ -134,16 +129,14 @@ variable "admin_port" {
 }
 
 variable "trusted_admin_cidrs" {
-  description = "允許 SSH 與 Access Server Admin UI 的可信來源 CIDR。"
+  description = "暫時允許 SSH 與 Access Server Admin UI 的來源 CIDR；環境穩態必須傳入空清單。"
   type        = list(string)
 
   validation {
-    condition = !var.enabled || (
-      length(var.trusted_admin_cidrs) > 0 && alltrue([
-        for cidr in var.trusted_admin_cidrs : can(cidrhost(cidr, 0)) && !contains(["0.0.0.0/0", "::/0"], cidr)
-      ])
-    )
-    error_message = "trusted_admin_cidrs 必須至少包含一個有效且非全開的 CIDR。"
+    condition = alltrue([
+      for cidr in var.trusted_admin_cidrs : can(cidrhost(cidr, 0)) && !contains(["0.0.0.0/0", "::/0"], cidr)
+    ])
+    error_message = "trusted_admin_cidrs 只能包含有效且非全開的 CIDR。"
   }
 }
 

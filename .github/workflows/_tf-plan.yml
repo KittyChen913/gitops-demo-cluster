@@ -31,6 +31,11 @@ on:
         description: "Unique plan label (e.g., dev-clusters, dev-k8s)"
         type: string
         required: true
+      prepare_openvpn_bootstrap:
+        description: "初次建立 OpenVPN 時是否模擬 runner /32 與 TCP/80 bootstrap"
+        type: boolean
+        required: false
+        default: false
     secrets:
       AWS_ACCOUNT_ID:
         description: "AWS account ID used by the OIDC role ARN"
@@ -71,6 +76,13 @@ jobs:
         with:
           ssm_param_path: "/gitops/shared"
 
+      - name: Validate OpenVPN Contact Email
+        run: |
+          if [[ ! "${OPENVPN_CONTACT_EMAIL:-}" =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ ]]; then
+            echo "::error title=Missing Parameter::SSM parameter /gitops/shared/OPENVPN_CONTACT_EMAIL is missing or invalid"
+            exit 1
+          fi
+
       - name: Terraform Init
         run: |
           terraform init \
@@ -82,6 +94,29 @@ jobs:
 
       - name: Terraform Validate
         run: terraform validate
+
+      - name: Resolve OpenVPN Bootstrap Plan
+        id: openvpn-bootstrap
+        env:
+          BOOTSTRAP_REQUESTED: ${{ inputs.prepare_openvpn_bootstrap }}
+        run: |
+          BOOTSTRAP_HTTP=false
+          TRUSTED_ADMIN_CIDRS='[]'
+
+          if [ "${BOOTSTRAP_REQUESTED}" = "true" ] && \
+             ! terraform state list 2>/dev/null \
+               | grep -Eq '^module\.openvpn\.linode_instance\.openvpn(\[0\])?$'; then
+            RUNNER_IP=$(bash "${GITHUB_WORKSPACE}/scripts/discover-runner-public-ip.sh")
+            echo "::add-mask::${RUNNER_IP}"
+
+            BOOTSTRAP_HTTP=true
+            TRUSTED_ADMIN_CIDRS="[\"${RUNNER_IP}/32\"]"
+          fi
+
+          {
+            echo "bootstrap_http=${BOOTSTRAP_HTTP}"
+            echo "trusted_admin_cidrs=${TRUSTED_ADMIN_CIDRS}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Terraform Plan
         run: |
@@ -114,6 +149,9 @@ jobs:
         env:
           TF_VAR_linode_token: ${{ env.LINODE_TOKEN }}
           TF_VAR_write_kubeconfig_files: "false"
+          TF_VAR_openvpn_contact_email: ${{ env.OPENVPN_CONTACT_EMAIL }}
+          TF_VAR_openvpn_bootstrap_http_enabled: ${{ steps.openvpn-bootstrap.outputs.bootstrap_http }}
+          TF_VAR_trusted_admin_cidrs: ${{ steps.openvpn-bootstrap.outputs.trusted_admin_cidrs }}
 
       - name: Post Plan Summary
         if: always()

@@ -35,6 +35,11 @@ on:
         description: "Unique apply phase label (e.g., dev-clusters)"
         type: string
         required: true
+      prepare_openvpn_bootstrap:
+        description: "初次建立 OpenVPN 時是否暫時開放 runner /32 與 TCP/80"
+        type: boolean
+        required: false
+        default: false
     secrets:
       AWS_ACCOUNT_ID:
         description: "AWS account ID used by the OIDC role ARN"
@@ -91,6 +96,13 @@ jobs:
         with:
           ssm_param_path: "/gitops/shared"
 
+      - name: Validate OpenVPN Contact Email
+        run: |
+          if [[ ! "${OPENVPN_CONTACT_EMAIL:-}" =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ ]]; then
+            echo "::error title=Missing Parameter::SSM parameter /gitops/shared/OPENVPN_CONTACT_EMAIL is missing or invalid"
+            exit 1
+          fi
+
       - name: Terraform Init
         run: |
           terraform init \
@@ -99,6 +111,32 @@ jobs:
             -input=false
         env:
           TF_VAR_linode_token: ${{ env.LINODE_TOKEN }}
+
+      - name: Resolve OpenVPN Bootstrap Access
+        id: openvpn-bootstrap
+        env:
+          BOOTSTRAP_REQUESTED: ${{ inputs.prepare_openvpn_bootstrap }}
+        run: |
+          BOOTSTRAP_NEEDED=false
+          BOOTSTRAP_HTTP=false
+          TRUSTED_ADMIN_CIDRS='[]'
+
+          if [ "${BOOTSTRAP_REQUESTED}" = "true" ] && \
+             ! terraform state list 2>/dev/null \
+               | grep -Eq '^module\.openvpn\.linode_instance\.openvpn(\[0\])?$'; then
+            RUNNER_IP=$(bash "${GITHUB_WORKSPACE}/scripts/discover-runner-public-ip.sh")
+            echo "::add-mask::${RUNNER_IP}"
+
+            BOOTSTRAP_NEEDED=true
+            BOOTSTRAP_HTTP=true
+            TRUSTED_ADMIN_CIDRS="[\"${RUNNER_IP}/32\"]"
+          fi
+
+          {
+            echo "needed=${BOOTSTRAP_NEEDED}"
+            echo "bootstrap_http=${BOOTSTRAP_HTTP}"
+            echo "trusted_admin_cidrs=${TRUSTED_ADMIN_CIDRS}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Terraform Plan (pre-apply)
         run: |
@@ -130,6 +168,9 @@ jobs:
         env:
           TF_VAR_linode_token: ${{ env.LINODE_TOKEN }}
           TF_VAR_write_kubeconfig_files: "false"
+          TF_VAR_openvpn_contact_email: ${{ env.OPENVPN_CONTACT_EMAIL }}
+          TF_VAR_openvpn_bootstrap_http_enabled: ${{ steps.openvpn-bootstrap.outputs.bootstrap_http }}
+          TF_VAR_trusted_admin_cidrs: ${{ steps.openvpn-bootstrap.outputs.trusted_admin_cidrs }}
 
       - name: Terraform Apply
         id: apply
@@ -154,6 +195,118 @@ jobs:
         env:
           TF_VAR_linode_token: ${{ env.LINODE_TOKEN }}
           TF_VAR_write_kubeconfig_files: "false"
+          TF_VAR_openvpn_contact_email: ${{ env.OPENVPN_CONTACT_EMAIL }}
+          TF_VAR_openvpn_bootstrap_http_enabled: ${{ steps.openvpn-bootstrap.outputs.bootstrap_http }}
+          TF_VAR_trusted_admin_cidrs: ${{ steps.openvpn-bootstrap.outputs.trusted_admin_cidrs }}
+
+      - name: Wait for OpenVPN Marketplace Readiness
+        if: steps.openvpn-bootstrap.outputs.needed == 'true' && steps.apply.outcome == 'success'
+        env:
+          TARGET_ENV: ${{ inputs.environment }}
+        run: |
+          OPENVPN_HOST=$(terraform output -raw openvpn_public_ipv4)
+          OPENVPN_USER=$(terraform output -json openvpn_ansible_config | jq -r '.openvpn_ssh_user')
+          PRIVATE_KEY_B64=$(aws ssm get-parameter \
+            --name "/gitops/${TARGET_ENV}/openvpn/ansible/OPENVPN_SSH_PRIVATE_KEY_B64" \
+            --with-decryption \
+            --query 'Parameter.Value' \
+            --output text)
+          HOST_KEY=$(aws ssm get-parameter \
+            --name "/gitops/${TARGET_ENV}/openvpn/ansible/OPENVPN_SSH_HOST_KEY" \
+            --query 'Parameter.Value' \
+            --output text)
+
+          echo "::add-mask::${PRIVATE_KEY_B64}"
+          echo "::add-mask::${HOST_KEY}"
+
+          WORK_DIR="${RUNNER_TEMP}/openvpn-bootstrap"
+          mkdir -p "${WORK_DIR}"
+          install -m 0600 /dev/null "${WORK_DIR}/id_openvpn"
+          printf '%s' "${PRIVATE_KEY_B64}" \
+            | base64 --decode > "${WORK_DIR}/id_openvpn"
+          printf '%s %s\n' "${OPENVPN_HOST}" "${HOST_KEY}" \
+            > "${WORK_DIR}/known_hosts"
+
+          for ATTEMPT in $(seq 1 60); do
+            if ssh \
+              -i "${WORK_DIR}/id_openvpn" \
+              -o BatchMode=yes \
+              -o ConnectTimeout=5 \
+              -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="${WORK_DIR}/known_hosts" \
+              "${OPENVPN_USER}@${OPENVPN_HOST}" \
+              'sudo systemctl is-active --quiet openvpnas && sudo /usr/local/openvpn_as/scripts/sacli status >/dev/null' \
+              2>/dev/null; then
+              echo "OpenVPN Access Server 已完成 Marketplace bootstrap。"
+              exit 0
+            fi
+
+            echo "等待 OpenVPN Access Server ready（${ATTEMPT}/60）..."
+            sleep 10
+          done
+
+          echo "::error title=OpenVPN Bootstrap Timeout::Access Server 未在 10 分鐘內 ready"
+          exit 1
+
+      - name: Close OpenVPN Bootstrap Access
+        if: always() && steps.openvpn-bootstrap.outputs.needed == 'true'
+        env:
+          TF_VAR_linode_token: ${{ env.LINODE_TOKEN }}
+          TF_VAR_write_kubeconfig_files: "false"
+          TF_VAR_openvpn_contact_email: ${{ env.OPENVPN_CONTACT_EMAIL }}
+          TF_VAR_openvpn_bootstrap_http_enabled: "false"
+          TF_VAR_trusted_admin_cidrs: "[]"
+        run: |
+          set +e
+          STATE_LIST=$(terraform state list 2>openvpn-bootstrap-cleanup-state.err)
+          STATE_EXIT=$?
+          set -e
+
+          if [ "${STATE_EXIT}" -ne 0 ]; then
+            cat openvpn-bootstrap-cleanup-state.err
+            echo "::error title=OpenVPN Cleanup Failed::無法讀取 Terraform state，拒絕略過 bootstrap cleanup"
+            exit "${STATE_EXIT}"
+          fi
+
+          if ! grep -Eq '^module\.openvpn\.linode_firewall\.openvpn(\[0\])?$' \
+            <<< "${STATE_LIST}"; then
+            echo "OpenVPN Firewall 尚未進入 Terraform state，無需執行 bootstrap cleanup。"
+            exit 0
+          fi
+
+          set +e
+          terraform plan \
+            -input=false \
+            -detailed-exitcode \
+            -target='module.openvpn.linode_firewall.openvpn' \
+            -out=openvpn-bootstrap-cleanup.tfplan \
+            > openvpn-bootstrap-cleanup-plan.log 2>&1
+          PLAN_EXIT=$?
+          set -e
+
+          grep -v -iE "^\s*(token|secret|pass[w]ord)\s*=" \
+            openvpn-bootstrap-cleanup-plan.log || true
+
+          case "${PLAN_EXIT}" in
+            0)
+              echo "OpenVPN bootstrap access 已關閉。"
+              ;;
+            2)
+              terraform apply \
+                -input=false \
+                -auto-approve \
+                openvpn-bootstrap-cleanup.tfplan \
+                > openvpn-bootstrap-cleanup-apply.log 2>&1
+              grep -v -iE "^\s*(token|secret|pass[w]ord)\s*=" \
+                openvpn-bootstrap-cleanup-apply.log || true
+              ;;
+            *)
+              echo "::error title=OpenVPN Cleanup Failed::無法產生 bootstrap cleanup plan"
+              exit 1
+              ;;
+          esac
+
+          rm -rf "${RUNNER_TEMP}/openvpn-bootstrap"
 
       - name: Post Apply Summary
         if: always()
@@ -166,6 +319,7 @@ jobs:
             echo "| Environment | \`${{ inputs.environment }}\` |"
             echo "| Phase | \`${{ inputs.plan_key }}\` |"
             echo "| Outcome | \`${{ steps.apply.outcome }}\` |"
+            echo "| OpenVPN bootstrap | \`${{ steps.openvpn-bootstrap.outputs.needed }}\` |"
             echo "| Commit | \`${{ github.sha }}\` |"
             echo "| Actor | @${{ github.actor }} |"
           } >> "$GITHUB_STEP_SUMMARY"

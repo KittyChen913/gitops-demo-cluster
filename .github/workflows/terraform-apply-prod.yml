@@ -179,6 +179,7 @@ jobs:
       environment: prod
       tf_dir: "terraform/environments/prod"
       plan_key: "prod-clusters"
+      prepare_openvpn_bootstrap: true
 
   # ── 階段 2：ArgoCD SA / RBAC / Token ───────────────────────────────────────────────
   # 注意: 同樣由 _tf-apply.yml 內部的 GitHub Environment "prod" 批准門戳把射。

@@ -8,48 +8,30 @@
       - allow
       - "{{ item }}/tcp"
   loop:
-    - "22"
     - "80"
     - "443"
-    - "943"
     - "945"
   register: openvpn_ufw_delete
   changed_when: openvpn_ufw_delete.rc == 0
   failed_when: false
   notify: 重新載入 UFW
 
-- name: 只允許可信來源 SSH
+- name: 允許由 Linode Firewall 管控來源的 SSH
   ansible.builtin.command:
     argv:
       - ufw
       - allow
-      - from
-      - "{{ item }}"
-      - to
-      - any
-      - port
-      - "22"
-      - proto
-      - tcp
-  loop: "{{ trusted_admin_cidrs }}"
+      - 22/tcp
   register: openvpn_ufw_ssh
   changed_when: "'Skipping adding existing rule' not in openvpn_ufw_ssh.stdout"
   notify: 重新載入 UFW
 
-- name: 只允許可信來源存取 Access Server Admin UI
+- name: 允許由 Linode Firewall 管控來源的 Access Server Admin UI
   ansible.builtin.command:
     argv:
       - ufw
       - allow
-      - from
-      - "{{ item }}"
-      - to
-      - any
-      - port
-      - "{{ openvpn_admin_port }}"
-      - proto
-      - tcp
-  loop: "{{ trusted_admin_cidrs }}"
+      - "{{ openvpn_admin_port }}/tcp"
   register: openvpn_ufw_admin
   changed_when: "'Skipping adding existing rule' not in openvpn_ufw_admin.stdout"
   notify: 重新載入 UFW

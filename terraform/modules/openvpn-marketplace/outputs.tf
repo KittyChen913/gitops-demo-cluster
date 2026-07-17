@@ -1,24 +1,29 @@
 output "instance_id" {
   description = "OpenVPN Linode ID。"
-  value       = try(linode_instance.openvpn[0].id, null)
+  value       = linode_instance.openvpn.id
 }
 
 output "public_ipv4" {
   description = "OpenVPN Linode public IPv4。"
-  value       = try(linode_instance.openvpn[0].ip_address, null)
+  value       = linode_instance.openvpn.ip_address
 }
 
 output "public_ipv6" {
   description = "OpenVPN Linode public IPv6 host address（不含 /128）。"
-  value       = try(trimsuffix(linode_instance.openvpn[0].ipv6, "/128"), null)
+  value       = trimsuffix(linode_instance.openvpn.ipv6, "/128")
 }
 
 output "label" {
   description = "OpenVPN Linode label。"
-  value       = try(linode_instance.openvpn[0].label, null)
+  value       = linode_instance.openvpn.label
 }
 
-output "firewall_id" {
-  description = "OpenVPN Linode Firewall ID。"
-  value       = try(linode_firewall.openvpn[0].id, null)
+output "openvpn_port" {
+  description = "OpenVPN listener port。"
+  value       = var.openvpn_port
+}
+
+output "openvpn_protocol" {
+  description = "OpenVPN listener protocol。"
+  value       = var.openvpn_protocol
 }

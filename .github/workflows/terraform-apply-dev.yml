@@ -145,6 +145,7 @@ jobs:
       environment: ${{ needs.preflight.outputs.target_env }}
       tf_dir: "terraform/environments/${{ needs.preflight.outputs.target_env }}"
       plan_key: "${{ needs.preflight.outputs.target_env }}-clusters"
+      prepare_openvpn_bootstrap: true
 
   # ── 階段 2：ArgoCD SA / RBAC / Token ───────────────────────────────────────────────
   apply-k8s:

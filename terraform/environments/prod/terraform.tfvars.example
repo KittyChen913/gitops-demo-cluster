@@ -1,7 +1,7 @@
 # 複製為 terraform.tfvars（已由 Git 忽略）後再調整。
 
 region              = "ap-south"
-k8s_version         = "1.32"
+k8s_version         = "1.35"
 mgmt_node_type      = "g6-standard-4"
 mgmt_node_count     = 3
 worker_node_type    = "g6-standard-4"

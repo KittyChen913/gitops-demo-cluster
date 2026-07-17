@@ -179,7 +179,7 @@ jobs:
       - name: Install kubectl
         uses: azure/setup-kubectl@v5
         with:
-          version: "v1.29.0"
+          version: "v1.35.0"
 
       - name: Run Health Check
         id: check

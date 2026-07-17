@@ -9,7 +9,7 @@ resource "aws_ssm_parameter" "mgmt_token" {
 
   name  = "${local.ssm_path_prefix}/${local.mgmt_label}/token"
   type  = "SecureString"
-  value = data.kubernetes_secret_v1.argocd_token_mgmt.data["token"]
+  value = module.argocd_mgmt.token
 
   tags = {
     Environment  = local.environment
@@ -24,7 +24,7 @@ resource "aws_ssm_parameter" "ateam_token" {
 
   name  = "${local.ssm_path_prefix}/${local.ateam_label}/token"
   type  = "SecureString"
-  value = data.kubernetes_secret_v1.argocd_token_ateam.data["token"]
+  value = module.argocd_ateam.token
 
   tags = {
     Environment  = local.environment

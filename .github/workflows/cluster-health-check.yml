@@ -1,23 +1,11 @@
 # =============================================================================
 # cluster-health-check.yml — 獨立 Cluster 健康檢查
 # =============================================================================
-#
-# 手動或排程執行 cluster 存活監控。
-# 對一個環境中所有 cluster 執行 check-cluster-health.sh。
-#
-# 與完整 post-provision pipeline 不同，此工作流程：
-#   - 僅執行健康檢查（不驗證 SA/RBAC 或 readiness）
-#   - 可指定對象為特定 cluster 或環境內所有 cluster
-#   - 可排程執行以定期監控
-#
-# 觸發條件：
-#   - workflow_dispatch（手動）
-#   - schedule（每日 UTC 06:17）
-#   - workflow_call（由其他工作流程呼叫，用於快速健康驗證）
-#
-# 僅文件變更行為：
-#   schedule 與 workflow_call/workflow_dispatch 不評估文件路徑 —
-#   僅文件提交永遠不會觸發此工作流程。
+# 排程執行時檢查 dev 與 prod；手動執行必須指定單一 cluster，
+# workflow_call 則可檢查指定 environment 的單一或全部 cluster。
+# workflow 會探索目標 environment 的 cluster，建立 environment + cluster matrix，
+# 再為每個 cluster 載入獨立的 SSM path 並執行 check-cluster-health.sh。
+# 排程失敗會建立或更新 incident issue，恢復後自動關閉。
 # =============================================================================
 
 name: "Cluster Health Check"
@@ -32,12 +20,11 @@ on:
         required: true
         default: "dev"
       cluster_label:
-        description: "Specific cluster label (empty = check all clusters)"
+        description: "Specific cluster label"
         type: string
-        default: ""
+        required: true
 
   schedule:
-    # 避開整點的 GitHub Actions 排程高峰。
     - cron: "17 6 * * *"
 
   workflow_call:
@@ -47,7 +34,7 @@ on:
         type: string
         required: true
       cluster_label:
-        description: "Specific cluster label (empty = check all)"
+        description: "Specific cluster label (empty = all clusters in selected environment)"
         type: string
         default: ""
     secrets:
@@ -57,23 +44,122 @@ on:
     outputs:
       health_result:
         description: "Health check result (success | failure)"
-        value: ${{ jobs.health-check.outputs.result }}
+        value: ${{ jobs.health-gate.outputs.result }}
 
 jobs:
-  health-check:
-    name: "Health Check [${{ inputs.environment || 'dev' }}]"
+  discover-targets:
+    name: "Discover Cluster Targets"
     runs-on: ubuntu-latest
 
     permissions:
       id-token: write
       contents: read
 
-    # 排程執行時對象為 dev（如需改為 prod 或加入 matrix 請自行修改）
-    env:
-      CHECK_ENV: ${{ inputs.environment || 'dev' }}
-
     outputs:
-      result: ${{ steps.evaluate.outputs.result }}
+      matrix: ${{ steps.discover.outputs.matrix }}
+      count: ${{ steps.discover.outputs.count }}
+      environments: ${{ steps.discover.outputs.environments }}
+      discovery_failures: ${{ steps.discover.outputs.discovery_failures }}
+      discovery_failure_count: ${{ steps.discover.outputs.discovery_failure_count }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "~1.10"
+          terraform_wrapper: false
+
+      - name: Configure AWS Credentials
+        uses: ./.github/actions/configure-aws-credentials
+        with:
+          aws-account-id: ${{ secrets.AWS_ACCOUNT_ID }}
+          aws-region: ap-southeast-1
+
+      - name: Resolve Environment and Cluster Matrix
+        id: discover
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_ENV: ${{ inputs.environment }}
+          LABEL_INPUT: ${{ inputs.cluster_label }}
+        run: |
+          if [ "${EVENT_NAME}" = "schedule" ]; then
+            ENVIRONMENTS="dev prod"
+          else
+            ENVIRONMENTS="${INPUT_ENV}"
+          fi
+
+          if [ "${EVENT_NAME}" = "workflow_dispatch" ] &&
+            [ -z "${LABEL_INPUT//[[:space:]]/}" ]; then
+            echo "::error title=Missing Cluster Label::Manual health checks require a specific cluster label"
+            exit 1
+          fi
+
+          TARGETS='[]'
+          DISCOVERY_FAILURES='[]'
+          for ENVIRONMENT in ${ENVIRONMENTS}; do
+            if ! LABELS=$(CLUSTER_ENV="${ENVIRONMENT}" \
+              CLUSTER_LABELS="${LABEL_INPUT}" \
+              bash scripts/discover-clusters.sh); then
+              echo "::error title=Cluster Discovery Failed::Unable to discover clusters for ${ENVIRONMENT}"
+              DISCOVERY_FAILURES=$(jq -cn \
+                --argjson current "${DISCOVERY_FAILURES}" \
+                --arg environment "${ENVIRONMENT}" \
+                '$current + [$environment]')
+              continue
+            fi
+
+            ENV_TARGETS=$(jq -c --arg environment "${ENVIRONMENT}" \
+              '[.[] | {environment: $environment, cluster_label: .}]' <<< "${LABELS}")
+            TARGETS=$(jq -cn \
+              --argjson current "${TARGETS}" \
+              --argjson next "${ENV_TARGETS}" \
+              '$current + $next')
+          done
+
+          COUNT=$(jq 'length' <<< "${TARGETS}")
+          FAILURE_COUNT=$(jq 'length' <<< "${DISCOVERY_FAILURES}")
+          MATRIX=$(jq -cn --argjson include "${TARGETS}" '{include: $include}')
+          ENVIRONMENT_LIST=$(tr ' ' ',' <<< "${ENVIRONMENTS}")
+          DISCOVERY_FAILURE_LIST=$(jq -r 'join(",")' <<< "${DISCOVERY_FAILURES}")
+
+          {
+            echo "matrix=${MATRIX}"
+            echo "count=${COUNT}"
+            echo "environments=${ENVIRONMENT_LIST}"
+            echo "discovery_failures=${DISCOVERY_FAILURE_LIST}"
+            echo "discovery_failure_count=${FAILURE_COUNT}"
+          } >> "${GITHUB_OUTPUT}"
+          echo "Resolved cluster matrix: ${MATRIX}"
+
+          if [ "${COUNT}" -eq 0 ]; then
+            echo "::error::No clusters discovered for: ${ENVIRONMENTS}"
+          fi
+
+      - name: Enforce Discovery Result
+        env:
+          CLUSTER_COUNT: ${{ steps.discover.outputs.count }}
+          DISCOVERY_FAILURE_COUNT: ${{ steps.discover.outputs.discovery_failure_count }}
+        run: |
+          if [ "${DISCOVERY_FAILURE_COUNT}" -gt 0 ] || [ "${CLUSTER_COUNT}" -eq 0 ]; then
+            exit 1
+          fi
+
+  health-check:
+    name: "Health Check [${{ matrix.environment }} / ${{ matrix.cluster_label }}]"
+    runs-on: ubuntu-latest
+    needs: discover-targets
+    if: always() && needs.discover-targets.outputs.count != '0'
+
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.discover-targets.outputs.matrix) }}
+
+    permissions:
+      id-token: write
+      contents: read
 
     steps:
       - name: Checkout
@@ -85,100 +171,192 @@ jobs:
           aws-account-id: ${{ secrets.AWS_ACCOUNT_ID }}
           aws-region: ap-southeast-1
 
+      - name: Fetch Cluster Credentials
+        uses: ./.github/actions/get-ssm-parameters
+        with:
+          ssm_param_path: "/gitops/${{ matrix.environment }}/clusters/${{ matrix.cluster_label }}"
+
       - name: Install kubectl
         uses: azure/setup-kubectl@v5
         with:
           version: "v1.29.0"
 
-      - name: Discover and check clusters
+      - name: Run Health Check
         id: check
         env:
-          SPECIFIC_LABEL_INPUT: ${{ inputs.cluster_label }}
-          AWS_REGION: ap-southeast-1
-        run: |
-          HEALTH_CHECK_SCRIPT="${GITHUB_WORKSPACE}/scripts/check-cluster-health.sh"
-          if [ ! -f "${HEALTH_CHECK_SCRIPT}" ]; then
-            echo "::error::Health check script was not found at ${HEALTH_CHECK_SCRIPT}"
-            echo "Checked out ref=${GITHUB_REF} sha=${GITHUB_SHA}"
-            exit 1
-          fi
+          CLUSTER_ENV: ${{ matrix.environment }}
+          CLUSTER_LABEL: ${{ matrix.cluster_label }}
+        run: bash scripts/check-cluster-health.sh
 
-          SPECIFIC_LABEL="${SPECIFIC_LABEL_INPUT}"
-          SSM_PREFIX="/gitops/${CHECK_ENV}/clusters"
-
-          if [ -n "${SPECIFIC_LABEL}" ]; then
-            LABELS="${SPECIFIC_LABEL}"
-          else
-            echo "Discovering clusters from SSM path: ${SSM_PREFIX}..."
-            LABELS=$(aws ssm get-parameters-by-path \
-              --path "${SSM_PREFIX}" \
-              --region "${AWS_REGION}" \
-              --recursive \
-              --query "Parameters[?ends_with(Name, '/api-endpoint')].Name" \
-              --output text \
-              | tr '\t' '\n' \
-              | sed "s|${SSM_PREFIX}/||" \
-              | sed 's|/api-endpoint||' \
-              | tr '\n' ' ' \
-              | xargs)
-          fi
-
-          if [ -z "${LABELS}" ]; then
-            echo "::error::No clusters found for environment ${CHECK_ENV}"
-            exit 1
-          fi
-
-          echo "Clusters to check: ${LABELS}"
-          FAILED=0
-          CHECKED=0
-
-          for LABEL in ${LABELS}; do
-            echo "::group::Health Check — ${LABEL}"
-            if CLUSTER_ENV="${CHECK_ENV}" \
-               CLUSTER_LABEL="${LABEL}" \
-               bash "${HEALTH_CHECK_SCRIPT}"; then
-              CHECKED=$((CHECKED + 1))
-              echo "::endgroup::"
-            else
-              FAILED=$((FAILED + 1))
-              echo "::endgroup::"
-              echo "::error title=Unhealthy::${LABEL} failed health check"
-            fi
-          done
-
-          {
-            echo "checked=${CHECKED}"
-            echo "failed=${FAILED}"
-            echo "labels=${LABELS}"
-          } >> "$GITHUB_OUTPUT"
-
-          if [ "${FAILED}" -gt "0" ]; then
-            exit 1
-          fi
-
-      - name: Evaluate result
-        id: evaluate
+      - name: Post Cluster Summary
         if: always()
         env:
-          CHECK_CONCLUSION: ${{ steps.check.conclusion }}
+          CHECK_ENV: ${{ matrix.environment }}
+          CLUSTER_LABEL: ${{ matrix.cluster_label }}
+          CHECK_OUTCOME: ${{ steps.check.outcome }}
         run: |
-          if [ "${CHECK_CONCLUSION}" = "success" ]; then
-            echo "result=success" >> "$GITHUB_OUTPUT"
+          if [ "${CHECK_OUTCOME}" = "success" ]; then
+            FAILED=0
           else
-            echo "result=failure" >> "$GITHUB_OUTPUT"
+            FAILED=1
           fi
 
-      - name: Post Health Check Summary
-        if: always()
-        run: |
           {
-            echo "## Cluster Health Check: \`${CHECK_ENV}\`"
+            echo "## Cluster Health Check: \`${CLUSTER_LABEL}\`"
             echo ""
             echo "| Field | Value |"
             echo "|-------|-------|"
             echo "| Environment | \`${CHECK_ENV}\` |"
-            echo "| Clusters checked | ${{ steps.check.outputs.checked || '0' }} |"
-            echo "| Failures | ${{ steps.check.outputs.failed || 'N/A' }} |"
-            echo "| Result | ${{ steps.evaluate.outputs.result }} |"
-            echo "| Triggered by | ${{ github.event_name }} |"
-          } >> "$GITHUB_STEP_SUMMARY"
+            echo "| Cluster | \`${CLUSTER_LABEL}\` |"
+            echo "| Failures | ${FAILED} |"
+            echo "| Result | ${CHECK_OUTCOME} |"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  health-gate:
+    name: "Cluster Health Gate"
+    runs-on: ubuntu-latest
+    needs: [discover-targets, health-check]
+    if: always()
+
+    permissions:
+      contents: read
+      issues: write
+
+    outputs:
+      result: ${{ steps.evaluate.outputs.result }}
+
+    steps:
+      - name: Evaluate Result
+        id: evaluate
+        env:
+          DISCOVERY_RESULT: ${{ needs.discover-targets.result }}
+          HEALTH_RESULT: ${{ needs.health-check.result }}
+        run: |
+          if [ "${DISCOVERY_RESULT}" = "success" ] && [ "${HEALTH_RESULT}" = "success" ]; then
+            echo "result=success" >> "${GITHUB_OUTPUT}"
+          else
+            echo "result=failure" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Post Overall Summary
+        if: always()
+        env:
+          CHECK_ENVS: ${{ needs.discover-targets.outputs.environments || 'unknown' }}
+          CLUSTER_COUNT: ${{ needs.discover-targets.outputs.count || '0' }}
+          DISCOVERY_FAILURES: ${{ needs.discover-targets.outputs.discovery_failures || 'none' }}
+        run: |
+          {
+            echo "## Cluster Health Check"
+            echo ""
+            echo "| Field | Value |"
+            echo "|-------|-------|"
+            echo "| Environments | \`${CHECK_ENVS}\` |"
+            echo "| Clusters discovered | ${CLUSTER_COUNT} |"
+            echo "| Discovery failures | \`${DISCOVERY_FAILURES}\` |"
+            echo "| Discovery | ${{ needs.discover-targets.result }} |"
+            echo "| Health matrix | ${{ needs.health-check.result }} |"
+            echo "| Overall result | ${{ steps.evaluate.outputs.result }} |"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Create or Update Incident Issue
+        if: github.event_name == 'schedule' && steps.evaluate.outputs.result != 'success'
+        uses: actions/github-script@v7
+        env:
+          CHECK_ENVS: ${{ needs.discover-targets.outputs.environments || 'unknown' }}
+          CLUSTER_COUNT: ${{ needs.discover-targets.outputs.count || '0' }}
+          DISCOVERY_FAILURES: ${{ needs.discover-targets.outputs.discovery_failures || 'none' }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const labels = ['cluster-health-failure', 'incident'];
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+
+            for (const name of labels) {
+              try {
+                await github.rest.issues.getLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name,
+                });
+              } catch (error) {
+                if (error.status !== 404) throw error;
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name,
+                  color: name === 'incident' ? 'd73a4a' : 'fbca04',
+                  description: 'Managed by the scheduled cluster health workflow',
+                });
+              }
+            }
+
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: ['cluster-health-failure'],
+              state: 'open',
+            });
+
+            const body = [
+              '## Cluster Health Check Failure',
+              '',
+              `**Environments:** ${process.env.CHECK_ENVS}`,
+              `**Clusters discovered:** ${process.env.CLUSTER_COUNT}`,
+              `**Discovery failures:** ${process.env.DISCOVERY_FAILURES}`,
+              `**Run:** [View Actions Run](${runUrl})`,
+              `**Detected:** ${new Date().toISOString()}`,
+              '',
+              'Review the matrix jobs and step summaries to identify the unhealthy cluster.',
+            ].join('\n');
+
+            if (issues.length === 0) {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: 'Cluster Health Check Failure',
+                body,
+                labels,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issues[0].number,
+                body: `### Health Check Still Failing\n\n${body}`,
+              });
+            }
+
+      - name: Close Incident Issue on Recovery
+        if: github.event_name == 'schedule' && steps.evaluate.outputs.result == 'success'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: ['cluster-health-failure'],
+              state: 'open',
+            });
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+
+            for (const issue of issues) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: `Cluster health recovered. [View Actions Run](${runUrl})`,
+              });
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                state: 'closed',
+              });
+            }
+
+      - name: Enforce Result
+        if: steps.evaluate.outputs.result != 'success'
+        run: |
+          echo "::error title=Cluster Health Check Failed::One or more clusters failed health checks"
+          exit 1

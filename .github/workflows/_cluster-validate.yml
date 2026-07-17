@@ -3,18 +3,8 @@
 # =============================================================================
 # 呼叫者: cluster-post-provision.yml
 #
-# 對環境中所有 cluster 執行完整驗證流程：
-#   Step 1 — check-cluster-health.sh     ：API server、節點、系統 pod
-#   Step 2 — verify-sa-rbac.sh           ：SA / ClusterRole / ClusterRoleBinding
-#   Step 3 — validate-cluster-readiness.sh ：端對端 SA token + 權限
-#
-# 三個 job 依序執行；每個 job 內逐一驗證所有 cluster（mgmt + workers）。
-# 需要 Phase 2 已完全 apply（SA token 必須存在於 SSM）。
-#
-# 安全性：
-#   - kubeconfig 不會在 job 間寫入磁碟
-#   - SA token 在指令內從 SSM 擷取並立即遡掩
-#   - 指令輸出不會上傳為 artifact
+# 先探索目標 cluster，再以 matrix 讓每個 job 只載入一個 cluster 的 SSM
+# path，依序執行健康檢查、SA/RBAC 與就緒狀態驗證。
 # =============================================================================
 
 name: "[Reusable] Cluster Validation"
@@ -41,10 +31,58 @@ on:
         value: ${{ jobs.readiness-gate.outputs.result }}
 
 jobs:
-  # ── Job 1：健康檢查（全部 cluster）──────────────────────────────────────────
+  discover-clusters:
+    name: "Discover Clusters [${{ inputs.environment }}]"
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+      contents: read
+
+    outputs:
+      matrix: ${{ steps.discover.outputs.matrix }}
+      count: ${{ steps.discover.outputs.count }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "~1.10"
+          terraform_wrapper: false
+
+      - name: Configure AWS Credentials
+        uses: ./.github/actions/configure-aws-credentials
+        with:
+          aws-account-id: ${{ secrets.AWS_ACCOUNT_ID }}
+          aws-region: ap-southeast-1
+
+      - name: Resolve Cluster Matrix
+        id: discover
+        env:
+          ENV_INPUT: ${{ inputs.environment }}
+          LABELS_INPUT: ${{ inputs.cluster_labels }}
+        run: |
+          MATRIX=$(CLUSTER_ENV="${ENV_INPUT}" \
+            CLUSTER_LABELS="${LABELS_INPUT}" \
+            bash scripts/discover-clusters.sh)
+
+          COUNT=$(jq 'length' <<< "${MATRIX}")
+          echo "matrix=${MATRIX}" >> "$GITHUB_OUTPUT"
+          echo "count=${COUNT}" >> "$GITHUB_OUTPUT"
+          echo "Resolved cluster matrix: ${MATRIX}"
+
   health-check:
-    name: "Health Check [${{ inputs.environment }}]"
+    name: "Health Check [${{ inputs.environment }} / ${{ matrix.cluster_label }}]"
     runs-on: ubuntu-latest
+    needs: discover-clusters
+
+    strategy:
+      fail-fast: false
+      matrix:
+        cluster_label: ${{ fromJSON(needs.discover-clusters.outputs.matrix) }}
 
     permissions:
       id-token: write
@@ -60,62 +98,31 @@ jobs:
           aws-account-id: ${{ secrets.AWS_ACCOUNT_ID }}
           aws-region: ap-southeast-1
 
+      - name: Fetch Cluster Credentials
+        uses: ./.github/actions/get-ssm-parameters
+        with:
+          ssm_param_path: "/gitops/${{ inputs.environment }}/clusters/${{ matrix.cluster_label }}"
+
       - name: Install kubectl
         uses: azure/setup-kubectl@v5
         with:
           version: "v1.29.0"
 
-      - name: Run Health Check (all clusters)
+      - name: Run Health Check
         env:
-          ENV_INPUT:    ${{ inputs.environment }}
-          LABELS_INPUT: ${{ inputs.cluster_labels }}
-          AWS_REGION:   ap-southeast-1
-        run: |
-          chmod +x scripts/check-cluster-health.sh
+          CLUSTER_ENV: ${{ inputs.environment }}
+          CLUSTER_LABEL: ${{ matrix.cluster_label }}
+        run: bash scripts/check-cluster-health.sh
 
-          # 若未指定，從 SSM 自動發現 cluster
-          LABELS="${LABELS_INPUT}"
-          if [ -z "${LABELS}" ]; then
-            SSM_PREFIX="/gitops/${ENV_INPUT}/clusters"
-            LABELS=$(aws ssm get-parameters-by-path \
-              --path "${SSM_PREFIX}" \
-              --region "${AWS_REGION}" \
-              --recursive \
-              --query "Parameters[?ends_with(Name, '/api-endpoint')].Name" \
-              --output text \
-              | tr '\t' '\n' \
-              | sed "s|${SSM_PREFIX}/||" \
-              | sed 's|/api-endpoint||' \
-              | tr '\n' ' ' \
-              | xargs)
-          fi
-
-          echo "Clusters to check: ${LABELS}"
-          FAILED=0
-
-          for LABEL in ${LABELS}; do
-            echo "::group::Health Check — ${LABEL}"
-            if ! CLUSTER_ENV="${ENV_INPUT}" \
-                 CLUSTER_LABEL="${LABEL}" \
-                 bash scripts/check-cluster-health.sh; then
-              echo "::endgroup::"
-              echo "::error title=Health Check Failed::${LABEL} failed health check"
-              FAILED=$((FAILED + 1))
-            else
-              echo "::endgroup::"
-            fi
-          done
-
-          if [ "${FAILED}" -gt "0" ]; then
-            echo "::error::${FAILED} cluster(s) failed health check"
-            exit 1
-          fi
-
-  # ── Job 2: SA / RBAC Verification ───────────────────────────────────────────
   verify-sa-rbac:
-    name: "Verify SA/RBAC [${{ inputs.environment }}]"
+    name: "Verify SA/RBAC [${{ inputs.environment }} / ${{ matrix.cluster_label }}]"
     runs-on: ubuntu-latest
-    needs: health-check
+    needs: [discover-clusters, health-check]
+
+    strategy:
+      fail-fast: false
+      matrix:
+        cluster_label: ${{ fromJSON(needs.discover-clusters.outputs.matrix) }}
 
     permissions:
       id-token: write
@@ -130,61 +137,32 @@ jobs:
         with:
           aws-account-id: ${{ secrets.AWS_ACCOUNT_ID }}
           aws-region: ap-southeast-1
+
+      - name: Fetch Cluster Credentials
+        uses: ./.github/actions/get-ssm-parameters
+        with:
+          ssm_param_path: "/gitops/${{ inputs.environment }}/clusters/${{ matrix.cluster_label }}"
 
       - name: Install kubectl
         uses: azure/setup-kubectl@v5
         with:
           version: "v1.29.0"
 
-      - name: Run SA/RBAC Verification (all clusters)
+      - name: Run SA/RBAC Verification
         env:
-          ENV_INPUT:    ${{ inputs.environment }}
-          LABELS_INPUT: ${{ inputs.cluster_labels }}
-          AWS_REGION:   ap-southeast-1
-        run: |
-          chmod +x scripts/verify-sa-rbac.sh
+          CLUSTER_ENV: ${{ inputs.environment }}
+          CLUSTER_LABEL: ${{ matrix.cluster_label }}
+        run: bash scripts/verify-sa-rbac.sh
 
-          LABELS="${LABELS_INPUT}"
-          if [ -z "${LABELS}" ]; then
-            SSM_PREFIX="/gitops/${ENV_INPUT}/clusters"
-            LABELS=$(aws ssm get-parameters-by-path \
-              --path "${SSM_PREFIX}" \
-              --region "${AWS_REGION}" \
-              --recursive \
-              --query "Parameters[?ends_with(Name, '/api-endpoint')].Name" \
-              --output text \
-              | tr '\t' '\n' \
-              | sed "s|${SSM_PREFIX}/||" \
-              | sed 's|/api-endpoint||' \
-              | tr '\n' ' ' \
-              | xargs)
-          fi
-
-          echo "Clusters to verify: ${LABELS}"
-          FAILED=0
-
-          for LABEL in ${LABELS}; do
-            echo "::group::SA/RBAC Verify — ${LABEL}"
-            if ! CLUSTER_ENV="${ENV_INPUT}" \
-                 CLUSTER_LABEL="${LABEL}" \
-                 bash scripts/verify-sa-rbac.sh; then
-              echo "::endgroup::"
-              FAILED=$((FAILED + 1))
-            else
-              echo "::endgroup::"
-            fi
-          done
-
-          if [ "${FAILED}" -gt "0" ]; then
-            echo "::error::${FAILED} cluster(s) failed SA/RBAC verification"
-            exit 1
-          fi
-
-  # ── Job 3: End-to-end Readiness Validation ───────────────────────────────────
   readiness-validation:
-    name: "Readiness Validation [${{ inputs.environment }}]"
+    name: "Readiness [${{ inputs.environment }} / ${{ matrix.cluster_label }}]"
     runs-on: ubuntu-latest
-    needs: verify-sa-rbac
+    needs: [discover-clusters, verify-sa-rbac]
+
+    strategy:
+      fail-fast: false
+      matrix:
+        cluster_label: ${{ fromJSON(needs.discover-clusters.outputs.matrix) }}
 
     permissions:
       id-token: write
@@ -199,6 +177,11 @@ jobs:
         with:
           aws-account-id: ${{ secrets.AWS_ACCOUNT_ID }}
           aws-region: ap-southeast-1
+
+      - name: Fetch Cluster Credentials
+        uses: ./.github/actions/get-ssm-parameters
+        with:
+          ssm_param_path: "/gitops/${{ inputs.environment }}/clusters/${{ matrix.cluster_label }}"
 
       - name: Install kubectl
         uses: azure/setup-kubectl@v5
@@ -207,21 +190,14 @@ jobs:
 
       - name: Run End-to-End Readiness Validation
         env:
-          ENV_INPUT:    ${{ inputs.environment }}
-          LABELS_INPUT: ${{ inputs.cluster_labels }}
-          AWS_REGION:   ap-southeast-1
-        run: |
-          chmod +x scripts/validate-cluster-readiness.sh
+          CLUSTER_ENV: ${{ inputs.environment }}
+          CLUSTER_LABEL: ${{ matrix.cluster_label }}
+        run: bash scripts/validate-cluster-readiness.sh
 
-          CLUSTER_ENV="${ENV_INPUT}" \
-          CLUSTER_LABELS="${LABELS_INPUT}" \
-          bash scripts/validate-cluster-readiness.sh
-
-  # ── Job 4: Readiness Gate (aggregates results) ───────────────────────────────
   readiness-gate:
     name: "Readiness Gate [${{ inputs.environment }}]"
     runs-on: ubuntu-latest
-    needs: [health-check, verify-sa-rbac, readiness-validation]
+    needs: [discover-clusters, health-check, verify-sa-rbac, readiness-validation]
     if: always()
 
     outputs:
@@ -231,45 +207,40 @@ jobs:
       - name: Evaluate Gate
         id: gate
         env:
-          ENV_INPUT:     ${{ inputs.environment }}
+          DISCOVERY_RESULT: ${{ needs.discover-clusters.result }}
           HEALTH_RESULT: ${{ needs.health-check.result }}
-          SA_RESULT:     ${{ needs.verify-sa-rbac.result }}
-          READY_RESULT:  ${{ needs.readiness-validation.result }}
+          SA_RESULT: ${{ needs.verify-sa-rbac.result }}
+          READY_RESULT: ${{ needs.readiness-validation.result }}
         run: |
-          HEALTH="${HEALTH_RESULT}"
-          SA="${SA_RESULT}"
-          READY="${READY_RESULT}"
-
-          echo "| Check | Result |"
-          echo "|-------|--------|"
-          echo "| Health Check | ${HEALTH} |"
-          echo "| SA/RBAC Verify | ${SA} |"
-          echo "| Readiness Validation | ${READY} |"
-
-          if [ "${HEALTH}" = "success" ] && \
-             [ "${SA}" = "success" ] && \
-             [ "${READY}" = "success" ]; then
+          if [ "${DISCOVERY_RESULT}" = "success" ] && \
+             [ "${HEALTH_RESULT}" = "success" ] && \
+             [ "${SA_RESULT}" = "success" ] && \
+             [ "${READY_RESULT}" = "success" ]; then
             echo "result=success" >> "$GITHUB_OUTPUT"
-            echo ""
-            echo "✓ All validation checks passed for ${ENV_INPUT}"
           else
             echo "result=failure" >> "$GITHUB_OUTPUT"
-            echo "::error title=Validation Gate Failed::One or more validation checks failed"
-            exit 1
           fi
 
       - name: Post Validation Summary
         if: always()
         env:
           ENV_INPUT: ${{ inputs.environment }}
+          CLUSTER_COUNT: ${{ needs.discover-clusters.outputs.count || '0' }}
         run: |
           {
             echo "## Cluster Validation: \`${ENV_INPUT}\`"
             echo ""
             echo "| Check | Result |"
             echo "|-------|--------|"
+            echo "| Discovery (${CLUSTER_COUNT} clusters) | ${{ needs.discover-clusters.result }} |"
             echo "| Health Check | ${{ needs.health-check.result }} |"
             echo "| SA/RBAC Verify | ${{ needs.verify-sa-rbac.result }} |"
             echo "| Readiness Validation | ${{ needs.readiness-validation.result }} |"
             echo "| **Overall Gate** | **${{ steps.gate.outputs.result }}** |"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Enforce Gate
+        if: steps.gate.outputs.result != 'success'
+        run: |
+          echo "::error title=Validation Gate Failed::One or more validation checks failed"
+          exit 1

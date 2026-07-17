@@ -13,7 +13,9 @@
 # 必要環境變數：
 #   CLUSTER_ENV      — 環境（dev | prod）
 #   CLUSTER_LABEL    — Cluster 標籤（例如 lke-dev-mgmt）
-#   AWS_REGION       — SSM Parameter Store 所在 AWS region
+#   API_ENDPOINT     — Cluster API 端點
+#   CA_CERT          — Base64 編碼的 cluster CA
+#   TOKEN            — ArgoCD ServiceAccount 權杖
 #
 # 結束代碼：
 #   0 — SA 與 RBAC 驗證通過
@@ -24,12 +26,15 @@ set -euo pipefail
 
 : "${CLUSTER_ENV:?Required env var: CLUSTER_ENV (dev|prod)}"
 : "${CLUSTER_LABEL:?Required env var: CLUSTER_LABEL (e.g. lke-dev-mgmt)}"
-: "${AWS_REGION:?Required env var: AWS_REGION}"
+: "${API_ENDPOINT:?Required env var: API_ENDPOINT}"
+: "${CA_CERT:?Required env var: CA_CERT}"
+: "${TOKEN:?Required env var: TOKEN}"
 
 SA_NAME="argocd-manager"
 SA_NAMESPACE="kube-system"
 TOKEN_SECRET_NAME="argocd-manager-token"
-SSM_PREFIX="/gitops/${CLUSTER_ENV}/clusters/${CLUSTER_LABEL}"
+CA_CERT_B64="${CA_CERT}"
+SA_TOKEN="${TOKEN}"
 
 FAILED=0
 
@@ -38,36 +43,10 @@ echo " verify-sa-rbac.sh"
 echo " env=${CLUSTER_ENV}  cluster=${CLUSTER_LABEL}"
 echo "============================================================"
 
-# ── Step 1：從 SSM 取得認證資料 ────────────────────────────────────────────────────
-echo "[1/5] Fetching cluster credentials from AWS SSM..."
-
-API_ENDPOINT=$(aws ssm get-parameter \
-  --name "${SSM_PREFIX}/api-endpoint" \
-  --region "${AWS_REGION}" \
-  --cli-connect-timeout 30 \
-  --cli-read-timeout 30 \
-  --query "Parameter.Value" \
-  --output text)
-
-CA_CERT_B64=$(aws ssm get-parameter \
-  --name "${SSM_PREFIX}/ca-cert" \
-  --region "${AWS_REGION}" \
-  --cli-connect-timeout 30 \
-  --cli-read-timeout 30 \
-  --query "Parameter.Value" \
-  --output text)
-
-SA_TOKEN=$(aws ssm get-parameter \
-  --name "${SSM_PREFIX}/token" \
-  --with-decryption \
-  --region "${AWS_REGION}" \
-  --cli-connect-timeout 30 \
-  --cli-read-timeout 30 \
-  --query "Parameter.Value" \
-  --output text)
-
+# ── 步驟 1：確認呼叫端已載入認證資料 ──────────────────────────────────────────────
+echo "[1/5] Using cluster credentials loaded from AWS SSM..."
 echo "::add-mask::${SA_TOKEN}"
-echo "      Credentials fetched"
+echo "      Credentials available"
 
 # ── 建立短暫 kubeconfig ─────────────────────────────────────────────────────────────
 KUBECONFIG_FILE=$(umask 077 && mktemp /tmp/kubeconfig.XXXXXX)

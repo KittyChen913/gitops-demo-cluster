@@ -8,16 +8,6 @@ locals {
   )
 }
 
-moved {
-  from = linode_instance.openvpn[0]
-  to   = linode_instance.openvpn
-}
-
-moved {
-  from = linode_firewall.openvpn[0]
-  to   = linode_firewall.openvpn
-}
-
 resource "linode_instance" "openvpn" {
   label  = var.label
   region = var.region

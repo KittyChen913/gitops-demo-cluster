@@ -35,6 +35,10 @@ on:
         options: [all, dev, prod]
         default: "all"
 
+permissions:
+  id-token: write
+  contents: read
+
 # 避免同一個 PR 被重複執行 Terraform Plan
 concurrency:
   group: tf-plan-pr-${{ github.event.pull_request.number || github.run_id }}

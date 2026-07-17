@@ -19,7 +19,8 @@
 #   或 workflow_dispatch 呼叫。僅文件提交因此永遠不會觸發此工作流程。
 #
 # 安全性：
-#   - SSM 內的 SA token 在指令中擷取，以 ::add-mask:: 遮掩
+#   - 每個 matrix job 透過 get-ssm-parameters Action 載入單一 cluster path
+#   - SSM 內的 SA token 會以 ::add-mask:: 遮掩
 #   - job 輸出和 step summary 不包含敏感資料
 #   - kubeconfig 為臨時檔案（tempfile，由 trap 刪除）
 # =============================================================================
@@ -59,6 +60,10 @@ on:
         description: "Specific cluster labels (space-separated, empty = all)"
         type: string
         default: ""
+
+permissions:
+  id-token: write
+  contents: read
 
 jobs:
   validate:

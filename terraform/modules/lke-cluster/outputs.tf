@@ -61,7 +61,7 @@ output "env" {
 }
 
 output "team" {
-  description = "Declared team (worker clusters only)."
+  description = "Declared team (Worker Clusters only)."
   value       = var.team
 }
 

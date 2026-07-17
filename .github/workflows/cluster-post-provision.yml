@@ -5,9 +5,9 @@
 # Terraform Phase 1 + Phase 2 apply 後，統籌執行驗證指令。
 #
 # 執行順序（嚴格順序）：
-#   Step 1 — check-cluster-health.sh      ：API server、節點、系統 pod
-#   Step 2 — verify-sa-rbac.sh            ：ArgoCD SA / ClusterRole / CRB
-#   Step 3 — validate-cluster-readiness.sh：端對端 SA token + SSM 參數
+#   步驟 1 — check-cluster-health.sh      ：API server、節點、系統 Pod
+#   步驟 2 — verify-sa-rbac.sh            ：ArgoCD SA / ClusterRole / CRB
+#   步驟 3 — validate-cluster-readiness.sh：端對端 SA 權杖與 SSM 參數
 #
 # 觸發條件：
 #   - workflow_call（由 terraform-apply-dev.yml 在 Phase 2 後呼叫）

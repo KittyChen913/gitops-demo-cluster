@@ -34,13 +34,13 @@ variable "cluster_role" {
 }
 
 variable "team" {
-  description = "Team identifier for worker clusters (e.g. ATeam). Omit for management clusters."
+  description = "Team identifier for Worker Clusters (e.g. ATeam). Omit for Management Clusters."
   type        = string
   default     = null
 
   validation {
     condition     = var.team == null || var.cluster_role != "management"
-    error_message = "team must not be set on management clusters."
+    error_message = "team must not be set on Management Clusters."
   }
 }
 

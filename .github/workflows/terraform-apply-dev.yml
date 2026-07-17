@@ -20,29 +20,29 @@
 #
 # 執行順序：
 #   ┌─────────────────────────────────────────────────────────────────┐
-#   │  [Quality Gate] workflow-quality.yml                             │
+#   │  [品質閘門] workflow-quality.yml                                 │
 #   │  actionlint + ShellCheck + Ansible lint/syntax                   │
 #   ├─────────────────────────────────────────────────────────────────┤
-#   │  [Bootstrap] bootstrap-backend                                  │
+#   │  [初始化] bootstrap-backend                                     │
 #   │  AWS S3 bucket（版本控制 + 加密 + 封鎖公開存取）              │
 #   ├─────────────────────────────────────────────────────────────────┤
-#   │  [Phase 1] apply-clusters                                       │
+#   │  [階段 1] apply-clusters                                        │
 #   │  terraform/environments/dev → 建立 LKE 與選用 OpenVPN          │
 #   │  寫入: SSM cluster metadata 與選用 OpenVPN deployment material │
 #   ├─────────────────────────────────────────────────────────────────┤
-#   │  [Phase 2] apply-k8s          （needs: apply-clusters）          │
+#   │  [階段 2] apply-k8s          （needs: apply-clusters）           │
 #   │  terraform/environments/dev-k8s → ArgoCD SA/RBAC/Token         │
 #   │  讀取: S3 backend 中的 Phase 1 remote state                    │
 #   │  寫入: SSM token（SecureString）                               │
 #   ├─────────────────────────────────────────────────────────────────┤
-#   │  [Post-Provision] cluster-post-provision.yml（workflow_call）    │
+#   │  [佈建後驗證] cluster-post-provision.yml（workflow_call）        │
 #   │  統籌: 健康檢查 → SA/RBAC 驗證 → 就緒檢查               │
 #   └─────────────────────────────────────────────────────────────────┘
 #
 # 環境保護：
 #   dev — 不需批准，push 到 master 自動 apply
 #
-# Concurrency：
+# 並行控制：
 #   同時只允許一個 dev apply。新的執行會排隊而非取消。
 # =============================================================================
 
@@ -87,7 +87,7 @@ env:
   # 生產部署一律由 terraform-apply-prod.yml 處理。
   TARGET_ENV: dev
 
-# Reusable workflows (_bootstrap-backend.yml, _tf-apply.yml) 要求 id-token: write
+# 可重用 workflow（_bootstrap-backend.yml、_tf-apply.yml）要求 id-token: write
 # 來執行 AWS OIDC 身份驗證。頂層 permissions 必須明確授予，
 # 否則 nested job 會被限制為 id-token: none。
 permissions:
@@ -100,7 +100,7 @@ jobs:
     name: "Workflow Quality Gate"
     uses: ./.github/workflows/workflow-quality.yml
 
-  # ── Pre-flight: validate required secrets are configured ──────────────────
+  # ── 前置檢查：確認必要的 Secret 已設定 ─────────────────────────────────────
   preflight:
     name: "Pre-flight Check [dev]"
     runs-on: ubuntu-latest
@@ -146,7 +146,7 @@ jobs:
       tf_dir: "terraform/environments/${{ needs.preflight.outputs.target_env }}"
       plan_key: "${{ needs.preflight.outputs.target_env }}-clusters"
 
-  # ── Phase 2：ArgoCD SA / RBAC / Token ──────────────────────────────────────────────
+  # ── 階段 2：ArgoCD SA / RBAC / Token ───────────────────────────────────────────────
   apply-k8s:
     name: "Phase 2 — Apply K8s SA/RBAC [${{ needs.preflight.outputs.target_env }}]"
     needs: [preflight, apply-clusters]
@@ -169,7 +169,7 @@ jobs:
     with:
       environment: ${{ needs.preflight.outputs.target_env }}
 
-  # ── Final Pipeline Summary ────────────────────────────────────────────────────
+  # ── 最終流程摘要 ─────────────────────────────────────────────────────────────
   pipeline-summary:
     name: "Pipeline Summary"
     runs-on: ubuntu-latest

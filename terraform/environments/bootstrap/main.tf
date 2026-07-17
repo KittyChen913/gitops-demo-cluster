@@ -1,5 +1,5 @@
 # =============================================================================
-# bootstrap/main.tf — Terraform State S3 Bucket
+# bootstrap/main.tf — S3 State Bucket
 # =============================================================================
 # 建立並設定 S3 bucket，作為所有環境（dev, dev-k8s, prod, prod-k8s）
 # 的 Terraform remote state backend。

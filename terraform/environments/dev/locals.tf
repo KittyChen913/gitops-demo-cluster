@@ -1,7 +1,7 @@
 locals {
   environment = "dev"
 
-  # Add BTeam / CTeam entries here when scaling (uncomment and apply).
+  # 擴充時在此加入 BTeam / CTeam 項目（取消註解後套用）。
   worker_clusters = {
     ateam = {
       label = "lke-dev-ateam"

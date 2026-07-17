@@ -18,25 +18,25 @@ variable "k8s_version" {
 }
 
 variable "mgmt_node_type" {
-  description = "Instance type for the management cluster node pool."
+  description = "Instance type for the Management Cluster node pool."
   type        = string
   default     = "g6-standard-2"
 }
 
 variable "mgmt_node_count" {
-  description = "Node count for the management cluster."
+  description = "Node count for the Management Cluster."
   type        = number
   default     = 2
 }
 
 variable "worker_node_type" {
-  description = "Default instance type for worker clusters."
+  description = "Default instance type for Worker Clusters."
   type        = string
   default     = "g6-standard-2"
 }
 
 variable "worker_node_count" {
-  description = "Default node count for worker clusters."
+  description = "Default node count for Worker Clusters."
   type        = number
   default     = 2
 }

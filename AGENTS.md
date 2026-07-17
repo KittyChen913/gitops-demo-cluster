@@ -37,6 +37,15 @@
 - 不要將 Argo CD 安裝、本體設定、Application/ApplicationSet 或 app manifests 加入本 repo。
 - 文件使用繁體中文為主；程式碼、變數、workflow id 與 script 名稱維持英文。
 
+## 註解與術語規範
+
+- 人工維護的程式碼、Terraform、GitHub Actions、Ansible、manifest、設定檔與腳本註解必須使用繁體中文。
+- 專有名詞、產品名稱、API、Kubernetes 資源種類、欄位名稱、命令、路徑與識別字可保留英文，但英文專有名詞必須放在中文敘述中，不得以完整英文句子撰寫註解。
+- `Management Cluster`、`Worker Cluster`、`Cluster` 與 `S3 State Bucket` 均視為專有名詞，不得翻譯成中文，也不得使用其他大小寫變體。
+- 複數形式必須寫成 `Management Clusters`、`Worker Clusters` 與 `S3 State Buckets`。
+- README、docs、Terraform description、workflow 顯示文字、summary 與人工維護的執行訊息也必須遵守相同的專有名詞大小寫。
+- 自動生成檔案（例如 `.terraform.lock.hcl`）的生成器註解、shebang、lint directive 與被註解掉的程式碼不需翻譯或改寫。
+
 ## Terraform 規範
 
 - Terraform CLI 最低版本為 `>= 1.10.0`，以支援 S3 backend 的 `use_lockfile` 原生鎖定。
@@ -49,7 +58,7 @@
 - `backend.tf` 只放 backend block 中必要且無法變數化的靜態設定：`key`、`encrypt`、`use_lockfile`。`bucket` 與 `region` 放在 `backend.hcl`。
 - `backend.hcl` 的 bucket 必須與 `terraform/environments/bootstrap/variables.tf` 的 `tf_state_bucket` 保持一致。
 - 除 `bootstrap/` 外，所有 `terraform init` 都必須使用 `-backend-config=backend.hcl -reconfigure -input=false`。
-- `bootstrap/` 使用 `backend "local" {}`，不可改成 S3 backend；它負責建立 S3 state bucket 本身。
+- `bootstrap/` 使用 `backend "local" {}`，不可改成 S3 backend；它負責建立 S3 State Bucket 本身。
 - Bootstrap S3 bucket 必須保留 versioning、server-side encryption、public access block 與 `prevent_destroy`，並維持 bucket 已存在即跳過的冪等邏輯；不要改成依賴 GitHub Actions cache 或 `terraform import`。
 - 不要讓 dev 與 prod 共用同一個 state key。
 - `linode_token` 是 sensitive；本機優先透過 `LINODE_TOKEN` 環境變數提供，CI 由 SSM `/gitops/shared/LINODE_TOKEN` 讀取。
@@ -57,7 +66,7 @@
   - `/gitops/<env>/clusters/<cluster-label>/api-endpoint`
   - `/gitops/<env>/clusters/<cluster-label>/ca-cert`
   - `/gitops/<env>/clusters/<cluster-label>/token`
-- 新增 worker cluster 時，需同步檢查：
+- 新增 Worker Cluster 時，需同步檢查：
   - Phase 1 `locals.tf` 的 `worker_clusters`
   - Phase 2 `locals.tf`、`providers.tf`、`argocd_sa.tf`、`ssm.tf`
   - README / docs 中的叢集清單與操作說明

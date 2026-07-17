@@ -1,9 +1,9 @@
-# Kubernetes provider aliases – one explicit block per cluster.
-# Admin credentials from Phase 1 remote state are used only for bootstrapping;
-# ArgoCD will use the dedicated SA token written to SSM by ssm.tf.
+# Kubernetes provider alias－每個 Cluster 各有一個明確的區塊。
+# 階段 1 遠端 state 的管理員憑證僅用於初始化；
+# ArgoCD 會使用 ssm.tf 寫入 SSM 的專用 SA 權杖。
 #
-# When adding a new cluster (e.g. bteam), add a provider block here and
-# follow the checklist in locals.tf.
+# 新增 Cluster（例如 bteam）時，在此加入 provider 區塊，
+# 並依照 locals.tf 的檢查清單處理。
 
 provider "kubernetes" {
   alias                  = "mgmt"

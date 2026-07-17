@@ -1,7 +1,7 @@
 # ---------------------------------------------------------------------------
-# AWS SSM Parameter Store – ArgoCD SA tokens (Phase 2)
+# AWS SSM Parameter Store－ArgoCD SA 權杖（階段 2）
 #
-# Path: /gitops/prod/clusters/<cluster-label>/token  (SecureString)
+# 路徑：/gitops/prod/clusters/<cluster-label>/token（SecureString）
 # ---------------------------------------------------------------------------
 
 resource "aws_ssm_parameter" "mgmt_token" {

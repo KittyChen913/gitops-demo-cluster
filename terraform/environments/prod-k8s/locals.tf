@@ -11,7 +11,7 @@ locals {
   environment     = "prod"
   ssm_path_prefix = "/gitops/${local.environment}/clusters"
 
-  # Management cluster – admin credentials used only to bootstrap SA creation.
+  # Management Cluster－管理員憑證僅用於初始化建立 SA。
   _mgmt_kc         = yamldecode(data.terraform_remote_state.clusters.outputs.kubeconfigs["lke-prod-mgmt"])
   mgmt_label       = data.terraform_remote_state.clusters.outputs.management_cluster.label
   mgmt_host        = data.terraform_remote_state.clusters.outputs.management_cluster.api_endpoints[0]
@@ -24,9 +24,9 @@ locals {
   ateam_ca_cert     = base64decode(local._ateam_kc.clusters[0].cluster["certificate-authority-data"])
   ateam_admin_token = local._ateam_kc.users[0].user.token
 
-  # When adding bteam/cteam:
-  # 1. Add locals here for _bteam_kc, bteam_label, bteam_host, bteam_ca_cert, bteam_admin_token
-  # 2. Add provider "kubernetes" { alias = "bteam" ... } in providers.tf
-  # 3. Add SA resources in argocd_sa.tf
-  # 4. Add SSM token parameter in ssm.tf
+  # 新增 bteam/cteam 時：
+  # 1. 在此加入 _bteam_kc、bteam_label、bteam_host、bteam_ca_cert、bteam_admin_token 等 locals
+  # 2. 在 providers.tf 加入 provider "kubernetes" { alias = "bteam" ... }
+  # 3. 在 argocd_sa.tf 加入 SA 資源
+  # 4. 在 ssm.tf 加入 SSM 權杖參數
 }

@@ -4,7 +4,7 @@
 # 呼叫者: terraform-apply-dev.yml, terraform-apply-prod.yml
 #
 # 執行內容（所有操作皆為冪等，可安全重複執行）：
-#   1. 從 bootstrap/variables.tf 讀取 tf_state_bucket default（唯一 source of truth）
+#   1. 從 bootstrap/variables.tf 讀取 tf_state_bucket 預設值（唯一真實來源）
 #   2. 檢查 S3 bucket 是否已存在：存在 → 跳過；不存在 → init → apply
 #
 # 安全性：

@@ -1,10 +1,10 @@
 # ---------------------------------------------------------------------------
-# AWS SSM Parameter Store – ArgoCD SA tokens (Phase 2)
+# AWS SSM Parameter Store－ArgoCD SA 權杖（階段 2）
 #
-# Writes the argocd-manager ServiceAccount token for each cluster.
-# The api-endpoint and ca-cert parameters are managed by dev/ssm.tf (Phase 1).
+# 寫入每個 Cluster 的 argocd-manager ServiceAccount 權杖。
+# api-endpoint 與 ca-cert 參數由 dev/ssm.tf（階段 1）管理。
 #
-# Path: /gitops/dev/clusters/<cluster-label>/token  (SecureString)
+# 路徑：/gitops/dev/clusters/<cluster-label>/token（SecureString）
 # ---------------------------------------------------------------------------
 
 resource "aws_ssm_parameter" "mgmt_token" {

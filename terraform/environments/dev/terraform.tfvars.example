@@ -1,4 +1,4 @@
-# Copy to terraform.tfvars (gitignored) and adjust.
+# 複製為 terraform.tfvars（已由 Git 忽略）後再調整。
 
 region              = "ap-south"
 k8s_version         = "1.35"
@@ -8,7 +8,7 @@ worker_node_type    = "g6-standard-2"
 worker_node_count   = 2
 write_kubeconfig_files = true
 
-# linode_token = ""  # prefer: export LINODE_TOKEN="..."
+# linode_token = ""  # 建議使用：export LINODE_TOKEN="..."
 
 # OpenVPN 是 opt-in；root password 與 SSH user/host keys 均由 Terraform 產生。
 # openvpn_enabled        = true
@@ -25,7 +25,7 @@ write_kubeconfig_files = true
 # openvpn_port             = 1194
 # openvpn_protocol         = "udp"
 # openvpn_enable_ipv6      = false
-# openvpn_bootstrap_http_enabled = true # 只限首次 Marketplace certbot；healthy 後改 false
+# openvpn_bootstrap_http_enabled = true # 只限首次 Marketplace certbot；健康後改為 false
 # openvpn_tunnel_cidr      = "172.27.224.0/20"
 # openvpn_server_tunnel_ip = "172.27.224.1"
 # internal_domain          = "corp.example"

@@ -1,13 +1,13 @@
 # ---------------------------------------------------------------------------
-# ArgoCD ServiceAccount setup
+# ArgoCD ServiceAccount 設定
 #
-# Each cluster gets:
-#   - A custom ClusterRole: read all resources + write common app resource types
-#   - A ClusterRoleBinding for the argocd-manager SA
-#   - A long-lived token Secret (kubernetes.io/service-account-token)
+# 每個 Cluster 都會建立：
+#   - 自訂 ClusterRole：讀取所有資源，並寫入常用的應用程式資源類型
+#   - argocd-manager SA 使用的 ClusterRoleBinding
+#   - 長效權杖 Secret（kubernetes.io/service-account-token）
 # ---------------------------------------------------------------------------
 
-# ── Management cluster ──────────────────────────────────────────────────────
+# ── Management Cluster ──────────────────────────────────────────────────────
 
 resource "kubernetes_cluster_role_v1" "argocd_mgmt" {
   provider = kubernetes.mgmt
@@ -15,13 +15,13 @@ resource "kubernetes_cluster_role_v1" "argocd_mgmt" {
     name = "argocd-manager"
   }
 
-  # Read-all: needed to compare desired vs actual state of all resources.
+  # 完整讀取權限：用於比較所有資源的期望狀態與實際狀態。
   rule {
     api_groups = ["*"]
     resources  = ["*"]
     verbs      = ["get", "list", "watch"]
   }
-  # Write: limited to the resource types this GitOps platform is expected to manage.
+  # 寫入權限：僅限此 GitOps 平台預期管理的資源類型。
   rule {
     api_groups = [""]
     resources  = ["namespaces", "configmaps", "secrets", "serviceaccounts", "services"]
@@ -91,7 +91,7 @@ resource "kubernetes_secret_v1" "argocd_token_mgmt" {
   type = "kubernetes.io/service-account-token"
 }
 
-# Read back the secret so Kubernetes-populated fields (token, ca.crt) are available.
+# 讀回 Secret，讓 Kubernetes 填入的欄位（token、ca.crt）可供使用。
 data "kubernetes_secret_v1" "argocd_token_mgmt" {
   provider = kubernetes.mgmt
   metadata {
@@ -101,7 +101,7 @@ data "kubernetes_secret_v1" "argocd_token_mgmt" {
   depends_on = [kubernetes_secret_v1.argocd_token_mgmt]
 }
 
-# ── ATeam worker cluster ─────────────────────────────────────────────────────
+# ── ATeam Worker Cluster ────────────────────────────────────────────────────
 
 resource "kubernetes_cluster_role_v1" "argocd_ateam" {
   provider = kubernetes.ateam

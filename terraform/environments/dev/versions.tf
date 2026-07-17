@@ -26,7 +26,7 @@ terraform {
 }
 
 provider "linode" {
-  # Uses LINODE_TOKEN environment variable when token is omitted.
+  # 省略 token 時使用 LINODE_TOKEN 環境變數。
   token = var.linode_token != "" ? var.linode_token : null
 }
 

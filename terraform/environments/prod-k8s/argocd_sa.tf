@@ -1,8 +1,8 @@
 # ---------------------------------------------------------------------------
-# ArgoCD ServiceAccount setup
+# ArgoCD ServiceAccount 設定
 # ---------------------------------------------------------------------------
 
-# ── Management cluster ──────────────────────────────────────────────────────
+# ── Management Cluster ──────────────────────────────────────────────────────
 
 resource "kubernetes_cluster_role_v1" "argocd_mgmt" {
   provider = kubernetes.mgmt
@@ -93,7 +93,7 @@ data "kubernetes_secret_v1" "argocd_token_mgmt" {
   depends_on = [kubernetes_secret_v1.argocd_token_mgmt]
 }
 
-# ── ATeam worker cluster ─────────────────────────────────────────────────────
+# ── ATeam Worker Cluster ────────────────────────────────────────────────────
 
 resource "kubernetes_cluster_role_v1" "argocd_ateam" {
   provider = kubernetes.ateam

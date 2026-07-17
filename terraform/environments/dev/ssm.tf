@@ -1,18 +1,18 @@
 # ---------------------------------------------------------------------------
-# AWS SSM Parameter Store – cluster registration (Phase 1)
+# AWS SSM Parameter Store－Cluster 註冊（階段 1）
 #
-# Stores API endpoint and CA certificate for each cluster.
-# The ArgoCD SA token (Phase 2) is written by dev-k8s/ssm.tf after
-# dedicated ServiceAccounts are created in each cluster.
+# 儲存每個 Cluster 的 API 端點與 CA 憑證。
+# 各 Cluster 建立專用 ServiceAccount 後，ArgoCD SA 權杖（階段 2）
+# 由 dev-k8s/ssm.tf 寫入。
 #
-# Path schema:
+# 路徑格式：
 #   /gitops/<env>/clusters/<cluster-label>/api-endpoint  (String)
 #   /gitops/<env>/clusters/<cluster-label>/ca-cert       (String, base64)
 #   /gitops/<env>/clusters/<cluster-label>/token         (SecureString) ← dev-k8s/
 # ---------------------------------------------------------------------------
 
 locals {
-  # Parse each kubeconfig to extract the CA certificate.
+  # 解析每個 kubeconfig 以擷取 CA 憑證。
   _mgmt_kc     = yamldecode(module.mgmt.kubeconfig_decoded)
   mgmt_ca_cert = local._mgmt_kc.clusters[0].cluster["certificate-authority-data"]
 
@@ -26,7 +26,7 @@ locals {
   }
 }
 
-# ── Management cluster ──────────────────────────────────────────────────────
+# ── Management Cluster ──────────────────────────────────────────────────────
 
 resource "aws_ssm_parameter" "mgmt_api_endpoint" {
   count = var.write_ssm_parameters ? 1 : 0
@@ -58,7 +58,7 @@ resource "aws_ssm_parameter" "mgmt_ca_cert" {
   }
 }
 
-# ── Worker clusters (one set of parameters per team) ────────────────────────
+# ── Worker Cluster（每個團隊一組參數）───────────────────────────────────────
 
 resource "aws_ssm_parameter" "worker_api_endpoint" {
   for_each = var.write_ssm_parameters ? local.worker_clusters : {}

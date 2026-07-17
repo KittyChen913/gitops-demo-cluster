@@ -71,7 +71,7 @@ SA_TOKEN=$(aws ssm get-parameter \
 echo "::add-mask::${SA_TOKEN}"
 echo "      Credentials fetched from SSM"
 
-# ── Step 2：建立短暫 kubeconfig ────────────────────────────────────────────────────────────────
+# ── 步驟 2：建立短暫 kubeconfig ────────────────────────────────────────────────────────────────
 echo "[2/5] Building temporary kubeconfig..."
 KUBECONFIG_FILE=$(umask 077 && mktemp /tmp/kubeconfig.XXXXXX)
 trap 'rm -f "${KUBECONFIG_FILE}"; unset KUBECONFIG' EXIT INT TERM
@@ -99,7 +99,7 @@ KUBECONFIG_EOF
 chmod 600 "${KUBECONFIG_FILE}"
 export KUBECONFIG="${KUBECONFIG_FILE}"
 
-# ── Step 3：檢查 API server 連線能力 ────────────────────────────────────────────
+# ── 步驟 3：檢查 API server 連線能力 ────────────────────────────────────────────
 echo "[3/5] Checking API server connectivity (timeout=${HEALTH_TIMEOUT}s)..."
 
 if ! kubectl cluster-info --request-timeout="${HEALTH_TIMEOUT}s" > /dev/null 2>&1; then
@@ -108,7 +108,7 @@ if ! kubectl cluster-info --request-timeout="${HEALTH_TIMEOUT}s" > /dev/null 2>&
 fi
 echo "      API server: OK"
 
-# ── Step 4：檢查節點狀態 ────────────────────────────────────────────────────────────────
+# ── 步驟 4：檢查節點狀態 ────────────────────────────────────────────────────────────────
 echo "[4/5] Checking node status..."
 
 NODE_STATUS=$(kubectl get nodes --no-headers --request-timeout="${HEALTH_TIMEOUT}s" 2>/dev/null || echo "")
@@ -132,7 +132,7 @@ if [ "${NOT_READY}" -gt "0" ]; then
 fi
 echo "      All ${TOTAL_NODES} nodes are Ready"
 
-# ── Step 5：檢查系統 pod ────────────────────────────────────────────────────────────────
+# ── 步驟 5：檢查系統 pod ────────────────────────────────────────────────────────────────
 echo "[5/5] Checking critical system pods (kube-system)..."
 
 FAILED_PODS=$(kubectl get pods -n kube-system --no-headers --request-timeout="${HEALTH_TIMEOUT}s" 2>/dev/null \

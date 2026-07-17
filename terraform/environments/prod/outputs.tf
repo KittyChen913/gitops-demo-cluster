@@ -4,7 +4,7 @@ output "environment" {
 }
 
 output "management_cluster" {
-  description = "Prod management cluster metadata."
+  description = "Prod Management Cluster metadata."
   value = {
     id              = module.mgmt.id
     label           = module.mgmt.label
@@ -18,7 +18,7 @@ output "management_cluster" {
 }
 
 output "worker_clusters" {
-  description = "Prod worker cluster metadata keyed by team slug."
+  description = "Prod Worker Cluster metadata keyed by team slug."
   value = {
     for key, cluster in module.worker : key => {
       id              = cluster.id

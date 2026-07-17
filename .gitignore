@@ -1,4 +1,4 @@
-# Terraform
+# Terraform 相關檔案
 **/.terraform/
 *.tfstate
 *.tfstate.*
@@ -10,7 +10,7 @@ override.tf.json
 *_override.tf
 *_override.tf.json
 
-# Secrets and local overrides (never commit)
+# Secret 與本地覆寫（禁止提交）
 terraform.tfvars
 *.auto.tfvars
 .env
@@ -18,5 +18,5 @@ terraform.tfvars
 ansible/inventories/local/
 ansible/**/*.vault.yml
 
-# Generated kubeconfigs
+# 產生的 kubeconfig
 kubeconfigs/

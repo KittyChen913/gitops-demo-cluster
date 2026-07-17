@@ -6,17 +6,13 @@ on:
   workflow_dispatch:
     inputs:
       environment:
-        description: "Environment to destroy"
+        description: "選擇要銷毀的 environment"
         type: choice
         options:
           - dev
           - prod
         required: true
         default: dev
-      confirmation:
-        description: "Type destroy-dev or destroy-prod to confirm"
-        type: string
-        required: true
 
 permissions:
   id-token: write
@@ -32,19 +28,11 @@ jobs:
     name: "Validate Destroy Request"
     runs-on: ubuntu-latest
     steps:
-      - name: Validate confirmation and credentials
+      - name: Validate credentials
         env:
           TARGET_ENV: ${{ inputs.environment }}
-          CONFIRMATION: ${{ inputs.confirmation }}
           AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
         run: |
-          EXPECTED="destroy-${TARGET_ENV}"
-
-          if [ "${CONFIRMATION}" != "${EXPECTED}" ]; then
-            echo "::error title=Confirmation Failed::Enter ${EXPECTED} to destroy ${TARGET_ENV}"
-            exit 1
-          fi
-
           if [ -z "${AWS_ACCOUNT_ID}" ]; then
             echo "::error title=Missing Secret::AWS_ACCOUNT_ID repository secret is not configured"
             exit 1
@@ -87,10 +75,15 @@ jobs:
         with:
           ssm_param_path: "/gitops/shared"
 
-      - name: Validate Linode Token
+      - name: Validate Shared Parameters
         run: |
           if [ -z "${LINODE_TOKEN:-}" ]; then
             echo "::error title=Missing Parameter::SSM parameter /gitops/shared/LINODE_TOKEN is not configured"
+            exit 1
+          fi
+
+          if [[ ! "${OPENVPN_CONTACT_EMAIL:-}" =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ ]]; then
+            echo "::error title=Missing Parameter::SSM parameter /gitops/shared/OPENVPN_CONTACT_EMAIL is missing or invalid"
             exit 1
           fi
 
@@ -179,6 +172,7 @@ jobs:
         working-directory: terraform/environments/${{ inputs.environment }}
         env:
           TF_VAR_linode_token: ${{ env.LINODE_TOKEN }}
+          TF_VAR_openvpn_contact_email: ${{ env.OPENVPN_CONTACT_EMAIL }}
         run: |
           terraform init \
             -backend-config=backend.hcl \
@@ -238,6 +232,7 @@ jobs:
         working-directory: terraform/environments/${{ inputs.environment }}
         env:
           TF_VAR_linode_token: ${{ env.LINODE_TOKEN }}
+          TF_VAR_openvpn_contact_email: ${{ env.OPENVPN_CONTACT_EMAIL }}
         run: |
           set +e
           terraform apply -auto-approve -no-color tfdestroy \

@@ -189,7 +189,7 @@ jobs:
         run: bash "${GITHUB_WORKSPACE}/scripts/openvpn-bootstrap.sh" wait
 
       - name: Close OpenVPN Bootstrap Access
-        if: always() && steps.openvpn-bootstrap.outputs.needed == 'true'
+        if: always() && steps.openvpn-bootstrap.outputs.needed == 'true' && steps.apply.outcome != 'skipped'
         env:
           TF_VAR_linode_token: ${{ env.LINODE_TOKEN }}
           TF_VAR_write_kubeconfig_files: "false"

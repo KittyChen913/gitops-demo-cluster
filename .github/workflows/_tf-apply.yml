@@ -36,7 +36,7 @@ on:
         type: string
         required: true
       prepare_openvpn_bootstrap:
-        description: "初次建立 OpenVPN 時是否暫時開放 runner /32 與 TCP/80"
+        description: "是否暫時開放 runner /32 並檢查 OpenVPN readiness；TCP/80 僅用於建立或 replacement"
         type: boolean
         required: false
         default: false
@@ -186,11 +186,17 @@ jobs:
           TF_VAR_openvpn_bootstrap_http_enabled: ${{ steps.openvpn-bootstrap.outputs.bootstrap_http }}
           TF_VAR_trusted_admin_cidrs: ${{ steps.openvpn-bootstrap.outputs.trusted_admin_cidrs }}
 
-      # ── OpenVPN bootstrap：首次建立或 replacement 時等待並關閉暫時權限 ──────
+      # ── OpenVPN readiness：Phase 1 每次檢查並關閉暫時權限 ──────────────────
       - name: Wait for OpenVPN Marketplace Readiness
         if: steps.openvpn-bootstrap.outputs.needed == 'true' && steps.apply.outcome == 'success'
         env:
           TARGET_ENV: ${{ inputs.environment }}
+          BOOTSTRAP_HTTP_ENABLED: ${{ steps.openvpn-bootstrap.outputs.bootstrap_http }}
+          TF_VAR_linode_token: ${{ env.LINODE_TOKEN }}
+          TF_VAR_write_kubeconfig_files: "false"
+          TF_VAR_openvpn_contact_email: ${{ env.OPENVPN_CONTACT_EMAIL }}
+          TF_VAR_openvpn_bootstrap_http_enabled: "true"
+          TF_VAR_trusted_admin_cidrs: ${{ steps.openvpn-bootstrap.outputs.trusted_admin_cidrs }}
         run: bash "${GITHUB_WORKSPACE}/scripts/openvpn-bootstrap.sh" wait
 
       - name: Close OpenVPN Bootstrap Access
@@ -214,7 +220,8 @@ jobs:
             echo "| Environment | \`${{ inputs.environment }}\` |"
             echo "| Phase | \`${{ inputs.plan_key }}\` |"
             echo "| Outcome | \`${{ steps.apply.outcome }}\` |"
-            echo "| OpenVPN bootstrap | \`${{ steps.openvpn-bootstrap.outputs.needed }}\` |"
+            echo "| OpenVPN readiness | \`${{ steps.openvpn-bootstrap.outputs.needed }}\` |"
+            echo "| OpenVPN replacement | \`${{ steps.openvpn-bootstrap.outputs.replacement }}\` |"
             echo "| Commit | \`${{ github.sha }}\` |"
             echo "| Actor | @${{ github.actor }} |"
           } >> "$GITHUB_STEP_SUMMARY"

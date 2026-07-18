@@ -6,7 +6,7 @@ set -euo pipefail
 
 readonly OPENVPN_INSTANCE_PATTERN='^module\.openvpn\.linode_instance\.openvpn(\[0\])?$'
 readonly OPENVPN_FIREWALL_PATTERN='^module\.openvpn\.linode_firewall\.openvpn(\[0\])?$'
-readonly READINESS_TIMEOUT_SECONDS=600
+readonly READINESS_TIMEOUT_SECONDS=900
 readonly READINESS_RETRY_SECONDS=10
 readonly SSH_ATTEMPT_TIMEOUT_SECONDS=15
 
@@ -119,7 +119,8 @@ describe_readiness_failure() {
 
 resolve_bootstrap_access() {
   local bootstrap_requested="${BOOTSTRAP_REQUESTED:-false}"
-  local bootstrap_needed=false
+  local readiness_needed=false
+  local replacement_needed=false
   local bootstrap_http=false
   local trusted_admin_cidrs='[]'
   local runner_ip
@@ -130,12 +131,13 @@ resolve_bootstrap_access() {
   : "${GITHUB_WORKSPACE:?GITHUB_WORKSPACE 未設定}"
 
   if [[ "${bootstrap_requested}" == "true" ]]; then
+    readiness_needed=true
     state_list="$(terraform state list)"
 
     if ! grep -Eq "${OPENVPN_INSTANCE_PATTERN}" <<< "${state_list}"; then
-      bootstrap_needed=true
+      replacement_needed=true
     elif openvpn_requires_replacement; then
-      bootstrap_needed=true
+      replacement_needed=true
     else
       replacement_exit=$?
       if [[ "${replacement_exit}" -ne 1 ]]; then
@@ -144,24 +146,142 @@ resolve_bootstrap_access() {
     fi
   fi
 
-  if [[ "${bootstrap_needed}" == "true" ]]; then
+  if [[ "${readiness_needed}" == "true" ]]; then
     runner_ip="$(bash "${GITHUB_WORKSPACE}/scripts/discover-runner-public-ip.sh")"
     echo "::add-mask::${runner_ip}"
 
-    bootstrap_http=true
     trusted_admin_cidrs="[\"${runner_ip}/32\"]"
   fi
 
+  if [[ "${replacement_needed}" == "true" ]]; then
+    bootstrap_http=true
+  fi
+
   {
-    echo "needed=${bootstrap_needed}"
+    echo "needed=${readiness_needed}"
+    echo "replacement=${replacement_needed}"
     echo "bootstrap_http=${bootstrap_http}"
     echo "trusted_admin_cidrs=${trusted_admin_cidrs}"
   } >> "${GITHUB_OUTPUT}"
 }
 
+report_marketplace_diagnostics() {
+  local openvpn_host="$1"
+  local openvpn_user="$2"
+  local private_key_file="$3"
+  local known_hosts_file="$4"
+  local diagnostics_exit
+
+  echo "::group::OpenVPN Marketplace 安裝診斷"
+  set +e
+  # 遠端命令中的變數應由 VM shell 展開，不可由 runner 預先展開。
+  # shellcheck disable=SC2016
+  timeout --signal=TERM "${SSH_ATTEMPT_TIMEOUT_SECONDS}s" ssh \
+    -i "${private_key_file}" \
+    -o BatchMode=yes \
+    -o ConnectTimeout=5 \
+    -o ServerAliveInterval=5 \
+    -o ServerAliveCountMax=1 \
+    -o StrictHostKeyChecking=yes \
+    -o UserKnownHostsFile="${known_hosts_file}" \
+    "${openvpn_user}@${openvpn_host}" \
+    'if ! sudo -n true >/dev/null 2>&1; then
+       echo "sudo=unavailable"
+       exit 0
+     fi
+
+     if sudo -n test -x /usr/local/openvpn_as/scripts/sacli; then
+       echo "sacli=present"
+     else
+       echo "sacli=absent"
+     fi
+
+     if dpkg-query -W openvpn-as >/dev/null 2>&1; then
+       echo "openvpn_as_package=installed"
+     else
+       echo "openvpn_as_package=absent"
+     fi
+
+     printf "openvpnas_service=%s\n" "$(sudo -n systemctl is-active openvpnas 2>/dev/null || true)"
+     printf "cloud_final_service=%s\n" "$(sudo -n systemctl is-active cloud-final.service 2>/dev/null || true)"
+
+     if pgrep -x apt >/dev/null 2>&1 ||
+        pgrep -x apt-get >/dev/null 2>&1 ||
+        pgrep -x dpkg >/dev/null 2>&1; then
+       echo "package_manager=active"
+     else
+       echo "package_manager=idle"
+     fi
+
+     if sudo -n test -r /var/log/stackscript.log; then
+       marker_count="$(sudo -n grep -ciE "fatal:|FAILED!|Traceback|ERROR" /var/log/stackscript.log 2>/dev/null || true)"
+       printf "stackscript_log=present,error_markers=%s\n" "${marker_count:-unknown}"
+     else
+       echo "stackscript_log=unavailable"
+     fi' \
+    2>/dev/null
+  diagnostics_exit=$?
+  set -e
+
+  if [[ "${diagnostics_exit}" -ne 0 ]]; then
+    echo "無法透過 SSH 取得 Marketplace 安裝診斷（exit code ${diagnostics_exit}）。"
+  fi
+  echo "::endgroup::"
+}
+
+ensure_bootstrap_http_access() (
+  local plan_file='openvpn-bootstrap-http.tfplan'
+  local plan_log='openvpn-bootstrap-http-plan.log'
+  local apply_log='openvpn-bootstrap-http-apply.log'
+  local plan_exit
+  local apply_exit
+
+  trap 'rm -f -- "${plan_file}" "${plan_log}" "${apply_log}"' EXIT
+
+  set +e
+  terraform plan \
+    -input=false \
+    -detailed-exitcode \
+    -target='module.openvpn.linode_firewall.openvpn' \
+    -out="${plan_file}" \
+    >"${plan_log}" 2>&1
+  plan_exit=$?
+  set -e
+
+  filter_terraform_log "${plan_log}"
+
+  case "${plan_exit}" in
+    0)
+      echo "OpenVPN bootstrap TCP/80 已處於暫時開放狀態。"
+      ;;
+    2)
+      set +e
+      terraform apply \
+        -input=false \
+        -auto-approve \
+        "${plan_file}" \
+        >"${apply_log}" 2>&1
+      apply_exit=$?
+      set -e
+
+      filter_terraform_log "${apply_log}"
+      if [[ "${apply_exit}" -ne 0 ]]; then
+        echo "::error title=OpenVPN Bootstrap Recovery Failed::無法為尚未完成的 Marketplace 安裝暫時開啟 TCP/80"
+        return "${apply_exit}"
+      fi
+      echo "已為尚未完成的 Marketplace 安裝暫時開啟 TCP/80。"
+      ;;
+    *)
+      echo "::error title=OpenVPN Bootstrap Recovery Failed::無法規劃 Marketplace 安裝所需的暫時 TCP/80 規則"
+      return 1
+      ;;
+  esac
+)
+
 wait_for_marketplace_readiness() {
   local target_env="${TARGET_ENV:?TARGET_ENV 未設定}"
   local runner_temp="${RUNNER_TEMP:?RUNNER_TEMP 未設定}"
+  local bootstrap_http_enabled="${BOOTSTRAP_HTTP_ENABLED:-false}"
   local openvpn_host
   local openvpn_user
   local private_key_b64
@@ -224,6 +344,12 @@ wait_for_marketplace_readiness() {
       return 0
     fi
 
+    if [[ "${bootstrap_http_enabled}" == "false" && "${ssh_exit}" =~ ^(21|22|23)$ ]]; then
+      echo "已確認既有 VM 的 Marketplace 安裝尚未 ready，恢復 bootstrap TCP/80 後繼續等待。"
+      ensure_bootstrap_http_access
+      bootstrap_http_enabled=true
+    fi
+
     last_reason="$(describe_readiness_failure "${ssh_exit}" "${ssh_error_file}")"
     remaining=$((deadline - SECONDS))
     if ((remaining <= 0)); then
@@ -238,6 +364,11 @@ wait_for_marketplace_readiness() {
     sleep "${sleep_seconds}"
   done
 
+  report_marketplace_diagnostics \
+    "${openvpn_host}" \
+    "${openvpn_user}" \
+    "${work_dir}/id_openvpn" \
+    "${work_dir}/known_hosts"
   echo "::error title=OpenVPN Bootstrap Timeout::Access Server 未在 ${READINESS_TIMEOUT_SECONDS} 秒內 ready；最後原因：${last_reason}"
   return 1
 }

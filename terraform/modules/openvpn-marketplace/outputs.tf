@@ -5,7 +5,7 @@ output "instance_id" {
 
 output "public_ipv4" {
   description = "OpenVPN Linode public IPv4。"
-  value       = linode_instance.openvpn.ip_address
+  value       = one(linode_instance.openvpn.ipv4)
 }
 
 output "public_ipv6" {

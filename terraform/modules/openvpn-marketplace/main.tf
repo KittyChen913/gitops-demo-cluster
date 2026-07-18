@@ -46,7 +46,7 @@ resource "linode_instance" "openvpn" {
     }
 
     postcondition {
-      condition     = var.expected_public_ipv4 == null || self.ip_address == var.expected_public_ipv4
+      condition     = var.expected_public_ipv4 == null || one(self.ipv4) == var.expected_public_ipv4
       error_message = "OpenVPN Linode 取得的 public IPv4 與 expected_public_ipv4 不同；不得繼續發布 allowlist 或 internal DNS。"
     }
   }

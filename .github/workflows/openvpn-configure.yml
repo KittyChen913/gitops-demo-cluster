@@ -71,7 +71,7 @@ jobs:
             -reconfigure \
             -input=false
 
-          terraform output -json openvpn_ansible_config \
+          terraform output -json openvpn_network_ansible_config \
             > "${RUNNER_TEMP}/openvpn-config.json"
 
           jq -e '

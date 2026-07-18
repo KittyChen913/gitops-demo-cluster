@@ -1,7 +1,7 @@
 # ---------------------------------------------------------------------------
-# AWS SSM Parameter Store－Cluster 註冊（階段 1）
+# AWS SSM Parameter Store－Phase 1 參數發布
 #
-# 儲存每個 Cluster 的 API 端點與 CA 憑證。
+# 儲存每個 Cluster 的 API 端點與 CA 憑證，以及 OpenVPN deployment credentials。
 # 各 Cluster 建立專用 ServiceAccount 後，ArgoCD SA 權杖（階段 2）
 # 由 dev-k8s/ssm.tf 寫入。
 #
@@ -9,6 +9,7 @@
 #   /gitops/<env>/clusters/<cluster-label>/api-endpoint  (String)
 #   /gitops/<env>/clusters/<cluster-label>/ca-cert       (String, base64)
 #   /gitops/<env>/clusters/<cluster-label>/token         (SecureString) ← dev-k8s/
+#   /gitops/<env>/openvpn/**                              (String / SecureString)
 # ---------------------------------------------------------------------------
 
 locals {
@@ -92,4 +93,47 @@ resource "aws_ssm_parameter" "worker_ca_cert" {
   }
 }
 
+# ── OpenVPN deployment credentials ──────────────────────────────────────────
+
+resource "aws_ssm_parameter" "openvpn_root_password" {
+  count = var.write_ssm_parameters ? 1 : 0
+
+  name  = "/gitops/${local.environment}/openvpn/terraform/OPENVPN_ROOT_PASSWORD"
+  type  = "SecureString"
+  value = random_password.openvpn_root.result
+
+  tags = {
+    Environment = local.environment
+    Component   = "openvpn"
+    ManagedBy   = "terraform"
+  }
+}
+
+resource "aws_ssm_parameter" "openvpn_ssh_private_key" {
+  count = var.write_ssm_parameters ? 1 : 0
+
+  name  = "/gitops/${local.environment}/openvpn/ansible/OPENVPN_SSH_PRIVATE_KEY_B64"
+  type  = "SecureString"
+  value = base64encode(tls_private_key.openvpn_ssh.private_key_openssh)
+
+  tags = {
+    Environment = local.environment
+    Component   = "openvpn"
+    ManagedBy   = "terraform"
+  }
+}
+
+resource "aws_ssm_parameter" "openvpn_ssh_host_key" {
+  count = var.write_ssm_parameters ? 1 : 0
+
+  name  = "/gitops/${local.environment}/openvpn/ansible/OPENVPN_SSH_HOST_KEY"
+  type  = "String"
+  value = trimspace(tls_private_key.openvpn_host.public_key_openssh)
+
+  tags = {
+    Environment = local.environment
+    Component   = "openvpn"
+    ManagedBy   = "terraform"
+  }
+}
 

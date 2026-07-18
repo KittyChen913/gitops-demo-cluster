@@ -54,7 +54,7 @@ variable "aws_region" {
 }
 
 variable "write_ssm_parameters" {
-  description = "Write cluster API endpoints and CA certificates to SSM; when OpenVPN is enabled, also write its generated deployment credentials."
+  description = "是否將 Cluster API endpoints、CA certificates 與自動產生的 OpenVPN deployment credentials 寫入 SSM。"
   type        = bool
   default     = true
 }

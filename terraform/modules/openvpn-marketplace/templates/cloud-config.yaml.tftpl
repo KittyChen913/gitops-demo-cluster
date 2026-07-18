@@ -8,5 +8,13 @@ ssh_keys:
 ssh:
   emit_keys_to_console: false
 
+write_files:
+  - path: /etc/sudoers.d/90-openvpn-automation
+    owner: root:root
+    permissions: "0440"
+    content: |
+      ${openvpn_admin_username} ALL=(ALL:ALL) NOPASSWD: ALL
+
 runcmd:
-  - systemctl restart ssh
+  - [visudo, -cf, /etc/sudoers.d/90-openvpn-automation]
+  - [systemctl, restart, ssh]

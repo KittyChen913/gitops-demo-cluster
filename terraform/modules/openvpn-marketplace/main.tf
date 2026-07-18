@@ -9,6 +9,15 @@ locals {
 
   trusted_admin_ipv4_cidrs = [for cidr in var.trusted_admin_cidrs : cidr if !strcontains(cidr, ":")]
   trusted_admin_ipv6_cidrs = [for cidr in var.trusted_admin_cidrs : cidr if strcontains(cidr, ":")]
+  openvpn_cloud_config = templatefile("${path.module}/templates/cloud-config.yaml.tftpl", {
+    openvpn_admin_username = lookup(var.stackscript_data, "user_name", "")
+    ssh_host_private_key   = trimspace(var.ssh_host_private_key)
+    ssh_host_public_key    = trimspace(var.ssh_host_public_key)
+  })
+}
+
+resource "terraform_data" "openvpn_cloud_config" {
+  triggers_replace = sha256(local.openvpn_cloud_config)
 }
 
 resource "linode_instance" "openvpn" {
@@ -25,13 +34,12 @@ resource "linode_instance" "openvpn" {
   tags             = var.tags
 
   metadata {
-    user_data = base64encode(templatefile("${path.module}/templates/cloud-config.yaml.tftpl", {
-      ssh_host_private_key = trimspace(var.ssh_host_private_key)
-      ssh_host_public_key  = trimspace(var.ssh_host_public_key)
-    }))
+    user_data = base64encode(local.openvpn_cloud_config)
   }
 
   lifecycle {
+    replace_triggered_by = [terraform_data.openvpn_cloud_config]
+
     precondition {
       condition = (
         length(var.root_password) >= 16 &&

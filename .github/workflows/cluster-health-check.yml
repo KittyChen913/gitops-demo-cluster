@@ -1,7 +1,8 @@
 # =============================================================================
 # cluster-health-check.yml — 獨立 Cluster 健康檢查
 # =============================================================================
-# 排程執行時檢查 dev 與 prod；手動執行必須指定單一 cluster，
+# 排程僅在 Repository Variable `DAILY_CLUSTER_HEALTH_CHECK_ENABLED` 為 `true` 時
+# 檢查 dev 與 prod；手動執行必須指定單一 cluster，
 # workflow_call 則可檢查指定 environment 的單一或全部 cluster。
 # workflow 會探索目標 environment 的 cluster，建立 environment + cluster matrix，
 # 再為每個 cluster 載入獨立的 SSM path 並執行 check-cluster-health.sh。
@@ -50,6 +51,7 @@ jobs:
   discover-targets:
     name: "Discover Cluster Targets"
     runs-on: ubuntu-latest
+    if: github.event_name != 'schedule' || vars.DAILY_CLUSTER_HEALTH_CHECK_ENABLED == 'true'
 
     permissions:
       id-token: write
@@ -151,7 +153,10 @@ jobs:
     name: "Health Check [${{ matrix.environment }} / ${{ matrix.cluster_label }}]"
     runs-on: ubuntu-latest
     needs: discover-targets
-    if: always() && needs.discover-targets.outputs.count != '0'
+    if: >-
+      (github.event_name != 'schedule' || vars.DAILY_CLUSTER_HEALTH_CHECK_ENABLED == 'true') &&
+      always() &&
+      needs.discover-targets.outputs.count != '0'
 
     strategy:
       fail-fast: false
@@ -216,7 +221,9 @@ jobs:
     name: "Cluster Health Gate"
     runs-on: ubuntu-latest
     needs: [discover-targets, health-check]
-    if: always()
+    if: >-
+      (github.event_name != 'schedule' || vars.DAILY_CLUSTER_HEALTH_CHECK_ENABLED == 'true') &&
+      always()
 
     permissions:
       contents: read

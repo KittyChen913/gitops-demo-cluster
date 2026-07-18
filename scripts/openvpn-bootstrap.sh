@@ -6,11 +6,53 @@ set -euo pipefail
 
 readonly OPENVPN_INSTANCE_PATTERN='^module\.openvpn\.linode_instance\.openvpn(\[0\])?$'
 readonly OPENVPN_FIREWALL_PATTERN='^module\.openvpn\.linode_firewall\.openvpn(\[0\])?$'
+readonly READINESS_TIMEOUT_SECONDS=600
+readonly READINESS_RETRY_SECONDS=10
+readonly SSH_ATTEMPT_TIMEOUT_SECONDS=15
 
 filter_terraform_log() {
   local log_file="$1"
 
   grep -v -iE '^\s*(token|secret|pass[w]ord)\s*=' "${log_file}" || true
+}
+
+describe_readiness_failure() {
+  local exit_code="$1"
+  local error_file="$2"
+
+  case "${exit_code}" in
+    20)
+      printf '%s\n' 'SSH 已連線，但遠端使用者無法執行免互動 sudo'
+      ;;
+    21)
+      printf '%s\n' 'SSH 已連線，但 sacli 尚未安裝或不可執行'
+      ;;
+    22)
+      printf '%s\n' 'SSH 已連線，但 openvpnas service 尚未 active'
+      ;;
+    23)
+      printf '%s\n' 'SSH 已連線且 openvpnas 已 active，但 sacli status 失敗'
+      ;;
+    124)
+      printf '%s\n' "SSH readiness 命令超過 ${SSH_ATTEMPT_TIMEOUT_SECONDS} 秒"
+      ;;
+    255)
+      if grep -qiE 'host key verification failed|remote host identification has changed|no .* host key is known' "${error_file}"; then
+        printf '%s\n' 'SSH host key 驗證失敗；cloud-init 可能尚未安裝 Terraform 管理的 host key'
+      elif grep -qiE 'permission denied|authentication failed' "${error_file}"; then
+        printf '%s\n' 'SSH 使用者或 private key 驗證失敗'
+      elif grep -qiE 'connection timed out|operation timed out|no route to host|connection refused' "${error_file}"; then
+        printf '%s\n' 'TCP/22 無法連線；請檢查 Linode Firewall runner /32 與 ssh service'
+      elif grep -qiE 'connection closed|connection reset|kex_exchange_identification' "${error_file}"; then
+        printf '%s\n' 'SSH transport 或 key exchange 尚未 ready'
+      else
+        printf '%s\n' 'SSH 連線失敗；請檢查 Firewall、host key 與使用者認證'
+      fi
+      ;;
+    *)
+      printf '遠端 readiness 命令失敗（exit code %s）\n' "${exit_code}"
+      ;;
+  esac
 }
 
 resolve_bootstrap_access() {
@@ -48,7 +90,13 @@ wait_for_marketplace_readiness() {
   local private_key_b64
   local host_key
   local work_dir="${runner_temp}/openvpn-bootstrap"
+  local ssh_error_file="${work_dir}/ssh-error.log"
+  local deadline
   local attempt
+  local ssh_exit
+  local last_reason='尚未執行 readiness 檢查'
+  local remaining
+  local sleep_seconds
 
   openvpn_host="$(terraform output -raw openvpn_public_ipv4)"
   openvpn_user="$(terraform output -json openvpn_network_ansible_config | jq -r '.openvpn_ssh_user')"
@@ -70,25 +118,50 @@ wait_for_marketplace_readiness() {
   printf '%s' "${private_key_b64}" | base64 --decode > "${work_dir}/id_openvpn"
   printf '%s %s\n' "${openvpn_host}" "${host_key}" > "${work_dir}/known_hosts"
 
-  for attempt in $(seq 1 60); do
-    if ssh \
+  deadline=$((SECONDS + READINESS_TIMEOUT_SECONDS))
+  attempt=0
+
+  while ((SECONDS < deadline)); do
+    attempt=$((attempt + 1))
+
+    set +e
+    timeout --signal=TERM "${SSH_ATTEMPT_TIMEOUT_SECONDS}s" ssh \
       -i "${work_dir}/id_openvpn" \
       -o BatchMode=yes \
       -o ConnectTimeout=5 \
+      -o ServerAliveInterval=5 \
+      -o ServerAliveCountMax=1 \
       -o StrictHostKeyChecking=yes \
       -o UserKnownHostsFile="${work_dir}/known_hosts" \
       "${openvpn_user}@${openvpn_host}" \
-      'sudo systemctl is-active --quiet openvpnas && sudo /usr/local/openvpn_as/scripts/sacli status >/dev/null' \
-      2>/dev/null; then
+      'if ! sudo -n true 2>/dev/null; then exit 20; fi
+       if ! sudo -n test -x /usr/local/openvpn_as/scripts/sacli; then exit 21; fi
+       if ! sudo -n systemctl is-active --quiet openvpnas; then exit 22; fi
+       if ! sudo -n /usr/local/openvpn_as/scripts/sacli status >/dev/null 2>&1; then exit 23; fi' \
+      2>"${ssh_error_file}"
+    ssh_exit=$?
+    set -e
+
+    if [[ "${ssh_exit}" -eq 0 ]]; then
       echo "OpenVPN Access Server 已完成 Marketplace bootstrap。"
       return 0
     fi
 
-    echo "等待 OpenVPN Access Server ready（${attempt}/60）..."
-    sleep 10
+    last_reason="$(describe_readiness_failure "${ssh_exit}" "${ssh_error_file}")"
+    remaining=$((deadline - SECONDS))
+    if ((remaining <= 0)); then
+      break
+    fi
+
+    echo "等待 OpenVPN Access Server ready（第 ${attempt} 次；原因：${last_reason}；剩餘約 ${remaining} 秒）..."
+    sleep_seconds=${READINESS_RETRY_SECONDS}
+    if ((sleep_seconds > remaining)); then
+      sleep_seconds=${remaining}
+    fi
+    sleep "${sleep_seconds}"
   done
 
-  echo "::error title=OpenVPN Bootstrap Timeout::Access Server 未在 10 分鐘內 ready"
+  echo "::error title=OpenVPN Bootstrap Timeout::Access Server 未在 ${READINESS_TIMEOUT_SECONDS} 秒內 ready；最後原因：${last_reason}"
   return 1
 }
 
@@ -100,7 +173,7 @@ close_bootstrap_access() {
   local plan_exit
   local apply_exit
 
-  rm -f "${work_dir}/id_openvpn" "${work_dir}/known_hosts"
+  rm -f "${work_dir}/id_openvpn" "${work_dir}/known_hosts" "${work_dir}/ssh-error.log"
   rmdir "${work_dir}" 2>/dev/null || true
 
   set +e

@@ -117,6 +117,11 @@ jobs:
         id: openvpn-bootstrap
         env:
           BOOTSTRAP_REQUESTED: ${{ inputs.prepare_openvpn_bootstrap }}
+          TF_VAR_linode_token: ${{ env.LINODE_TOKEN }}
+          TF_VAR_write_kubeconfig_files: "false"
+          TF_VAR_openvpn_contact_email: ${{ env.OPENVPN_CONTACT_EMAIL }}
+          TF_VAR_openvpn_bootstrap_http_enabled: "false"
+          TF_VAR_trusted_admin_cidrs: "[]"
         run: bash "${GITHUB_WORKSPACE}/scripts/openvpn-bootstrap.sh" resolve
 
       # ── Apply：以同一份 plan 套用 Phase 1 或 Phase 2 desired state ───────────
@@ -181,7 +186,7 @@ jobs:
           TF_VAR_openvpn_bootstrap_http_enabled: ${{ steps.openvpn-bootstrap.outputs.bootstrap_http }}
           TF_VAR_trusted_admin_cidrs: ${{ steps.openvpn-bootstrap.outputs.trusted_admin_cidrs }}
 
-      # ── OpenVPN bootstrap：只在 Phase 1 首次建立時等待並關閉暫時權限 ─────────
+      # ── OpenVPN bootstrap：首次建立或 replacement 時等待並關閉暫時權限 ──────
       - name: Wait for OpenVPN Marketplace Readiness
         if: steps.openvpn-bootstrap.outputs.needed == 'true' && steps.apply.outcome == 'success'
         env:

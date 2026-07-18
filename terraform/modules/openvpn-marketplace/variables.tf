@@ -86,6 +86,16 @@ variable "ssh_host_private_key" {
   sensitive   = true
 }
 
+variable "ssh_host_public_key" {
+  description = "Terraform 產生並由 cloud-init 安裝的 OpenVPN SSH Ed25519 host public key。"
+  type        = string
+
+  validation {
+    condition     = can(regex("^ssh-ed25519 [A-Za-z0-9+/]+={0,3}$", trimspace(var.ssh_host_public_key)))
+    error_message = "ssh_host_public_key 必須是單行 SSH Ed25519 public key。"
+  }
+}
+
 variable "tags" {
   description = "OpenVPN Linode 與 Firewall tags。"
   type        = list(string)

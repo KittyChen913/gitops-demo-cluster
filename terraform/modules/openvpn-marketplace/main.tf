@@ -26,7 +26,8 @@ resource "linode_instance" "openvpn" {
 
   metadata {
     user_data = base64encode(templatefile("${path.module}/templates/cloud-config.yaml.tftpl", {
-      ssh_host_private_key_b64 = base64encode(var.ssh_host_private_key)
+      ssh_host_private_key = trimspace(var.ssh_host_private_key)
+      ssh_host_public_key  = trimspace(var.ssh_host_public_key)
     }))
   }
 
@@ -36,6 +37,7 @@ resource "linode_instance" "openvpn" {
         length(var.root_password) >= 16 &&
         trimspace(var.ssh_public_key) != "" &&
         trimspace(var.ssh_host_private_key) != "" &&
+        trimspace(var.ssh_host_public_key) != "" &&
         can(regex("^[a-z_][a-z0-9_-]{0,31}$", lookup(var.stackscript_data, "user_name", ""))) &&
         can(regex("^[^@[:space:]]+@[^@[:space:]]+\\.[^@[:space:]]+$", lookup(var.stackscript_data, "soa_email_address", ""))) &&
         local.marketplace_stackscript_data.disable_root == "Yes"

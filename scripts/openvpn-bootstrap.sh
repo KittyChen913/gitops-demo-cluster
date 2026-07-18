@@ -16,6 +16,68 @@ filter_terraform_log() {
   grep -v -iE '^\s*(token|secret|pass[w]ord)\s*=' "${log_file}" || true
 }
 
+openvpn_requires_replacement() (
+  local runner_temp="${RUNNER_TEMP:?RUNNER_TEMP 未設定}"
+  local plan_file="${runner_temp}/openvpn-bootstrap-detect.tfplan"
+  local plan_json="${runner_temp}/openvpn-bootstrap-detect.json"
+  local plan_log="${runner_temp}/openvpn-bootstrap-detect.log"
+  local jq_exit
+  local plan_exit
+  local tfvars_args=()
+
+  trap 'rm -f -- "${plan_file}" "${plan_json}" "${plan_log}"' EXIT
+
+  if [[ -f terraform.tfvars ]]; then
+    tfvars_args=(-var-file=terraform.tfvars)
+  fi
+
+  set +e
+  terraform plan \
+    -input=false \
+    -target='module.openvpn.linode_instance.openvpn' \
+    -out="${plan_file}" \
+    "${tfvars_args[@]}" \
+    >"${plan_log}" 2>&1
+  plan_exit=$?
+  set -e
+
+  if [[ "${plan_exit}" -ne 0 ]]; then
+    echo "::group::OpenVPN replacement plan 診斷"
+    filter_terraform_log "${plan_log}"
+    echo "::endgroup::"
+    echo "::error title=OpenVPN Bootstrap Detection Failed::無法判斷 OpenVPN Linode 是否需要 replacement"
+    return 2
+  fi
+
+  if ! terraform show -json "${plan_file}" >"${plan_json}" 2>>"${plan_log}"; then
+    echo "::group::OpenVPN replacement plan 解析診斷"
+    filter_terraform_log "${plan_log}"
+    echo "::endgroup::"
+    echo "::error title=OpenVPN Bootstrap Detection Failed::無法解析 OpenVPN replacement plan"
+    return 2
+  fi
+
+  set +e
+  jq -e '
+    any(
+      .resource_changes[]?;
+      (.address | test("^module\\.openvpn\\.linode_instance\\.openvpn(\\[0\\])?$")) and
+      (.change.actions | index("create") != null)
+    )
+  ' "${plan_json}" >/dev/null
+  jq_exit=$?
+  set -e
+
+  case "${jq_exit}" in
+    0) return 0 ;;
+    1) return 1 ;;
+    *)
+      echo "::error title=OpenVPN Bootstrap Detection Failed::無法讀取 OpenVPN replacement actions"
+      return 2
+      ;;
+  esac
+)
+
 describe_readiness_failure() {
   local exit_code="$1"
   local error_file="$2"
@@ -61,16 +123,31 @@ resolve_bootstrap_access() {
   local bootstrap_http=false
   local trusted_admin_cidrs='[]'
   local runner_ip
+  local replacement_exit
+  local state_list
 
   : "${GITHUB_OUTPUT:?GITHUB_OUTPUT 未設定}"
   : "${GITHUB_WORKSPACE:?GITHUB_WORKSPACE 未設定}"
 
-  if [[ "${bootstrap_requested}" == "true" ]] && \
-     ! terraform state list 2>/dev/null | grep -Eq "${OPENVPN_INSTANCE_PATTERN}"; then
+  if [[ "${bootstrap_requested}" == "true" ]]; then
+    state_list="$(terraform state list)"
+
+    if ! grep -Eq "${OPENVPN_INSTANCE_PATTERN}" <<< "${state_list}"; then
+      bootstrap_needed=true
+    elif openvpn_requires_replacement; then
+      bootstrap_needed=true
+    else
+      replacement_exit=$?
+      if [[ "${replacement_exit}" -ne 1 ]]; then
+        return "${replacement_exit}"
+      fi
+    fi
+  fi
+
+  if [[ "${bootstrap_needed}" == "true" ]]; then
     runner_ip="$(bash "${GITHUB_WORKSPACE}/scripts/discover-runner-public-ip.sh")"
     echo "::add-mask::${runner_ip}"
 
-    bootstrap_needed=true
     bootstrap_http=true
     trusted_admin_cidrs="[\"${runner_ip}/32\"]"
   fi

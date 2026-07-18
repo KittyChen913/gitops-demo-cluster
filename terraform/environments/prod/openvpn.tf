@@ -124,6 +124,7 @@ module "openvpn" {
   root_password          = random_password.openvpn_root.result
   ssh_public_key         = tls_private_key.openvpn_ssh.public_key_openssh
   ssh_host_private_key   = tls_private_key.openvpn_host.private_key_openssh
+  ssh_host_public_key    = tls_private_key.openvpn_host.public_key_openssh
   tags                   = var.openvpn_tags
   enable_ipv6            = var.openvpn_enable_ipv6
   bootstrap_http_enabled = var.openvpn_bootstrap_http_enabled

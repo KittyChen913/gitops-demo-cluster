@@ -76,6 +76,7 @@ jobs:
         working-directory: ${{ inputs.tf_dir }}
 
     steps:
+      # ── Prepare：工具、憑證與 Terraform backend ──────────────────────────────
       - name: Checkout
         uses: actions/checkout@v6
 
@@ -116,28 +117,9 @@ jobs:
         id: openvpn-bootstrap
         env:
           BOOTSTRAP_REQUESTED: ${{ inputs.prepare_openvpn_bootstrap }}
-        run: |
-          BOOTSTRAP_NEEDED=false
-          BOOTSTRAP_HTTP=false
-          TRUSTED_ADMIN_CIDRS='[]'
+        run: bash "${GITHUB_WORKSPACE}/scripts/openvpn-bootstrap.sh" resolve
 
-          if [ "${BOOTSTRAP_REQUESTED}" = "true" ] && \
-             ! terraform state list 2>/dev/null \
-               | grep -Eq '^module\.openvpn\.linode_instance\.openvpn(\[0\])?$'; then
-            RUNNER_IP=$(bash "${GITHUB_WORKSPACE}/scripts/discover-runner-public-ip.sh")
-            echo "::add-mask::${RUNNER_IP}"
-
-            BOOTSTRAP_NEEDED=true
-            BOOTSTRAP_HTTP=true
-            TRUSTED_ADMIN_CIDRS="[\"${RUNNER_IP}/32\"]"
-          fi
-
-          {
-            echo "needed=${BOOTSTRAP_NEEDED}"
-            echo "bootstrap_http=${BOOTSTRAP_HTTP}"
-            echo "trusted_admin_cidrs=${TRUSTED_ADMIN_CIDRS}"
-          } >> "$GITHUB_OUTPUT"
-
+      # ── Apply：以同一份 plan 套用 Phase 1 或 Phase 2 desired state ───────────
       - name: Terraform Plan (pre-apply)
         run: |
           set +e
@@ -199,54 +181,12 @@ jobs:
           TF_VAR_openvpn_bootstrap_http_enabled: ${{ steps.openvpn-bootstrap.outputs.bootstrap_http }}
           TF_VAR_trusted_admin_cidrs: ${{ steps.openvpn-bootstrap.outputs.trusted_admin_cidrs }}
 
+      # ── OpenVPN bootstrap：只在 Phase 1 首次建立時等待並關閉暫時權限 ─────────
       - name: Wait for OpenVPN Marketplace Readiness
         if: steps.openvpn-bootstrap.outputs.needed == 'true' && steps.apply.outcome == 'success'
         env:
           TARGET_ENV: ${{ inputs.environment }}
-        run: |
-          OPENVPN_HOST=$(terraform output -raw openvpn_public_ipv4)
-          OPENVPN_USER=$(terraform output -json openvpn_ansible_config | jq -r '.openvpn_ssh_user')
-          PRIVATE_KEY_B64=$(aws ssm get-parameter \
-            --name "/gitops/${TARGET_ENV}/openvpn/ansible/OPENVPN_SSH_PRIVATE_KEY_B64" \
-            --with-decryption \
-            --query 'Parameter.Value' \
-            --output text)
-          HOST_KEY=$(aws ssm get-parameter \
-            --name "/gitops/${TARGET_ENV}/openvpn/ansible/OPENVPN_SSH_HOST_KEY" \
-            --query 'Parameter.Value' \
-            --output text)
-
-          echo "::add-mask::${PRIVATE_KEY_B64}"
-          echo "::add-mask::${HOST_KEY}"
-
-          WORK_DIR="${RUNNER_TEMP}/openvpn-bootstrap"
-          mkdir -p "${WORK_DIR}"
-          install -m 0600 /dev/null "${WORK_DIR}/id_openvpn"
-          printf '%s' "${PRIVATE_KEY_B64}" \
-            | base64 --decode > "${WORK_DIR}/id_openvpn"
-          printf '%s %s\n' "${OPENVPN_HOST}" "${HOST_KEY}" \
-            > "${WORK_DIR}/known_hosts"
-
-          for ATTEMPT in $(seq 1 60); do
-            if ssh \
-              -i "${WORK_DIR}/id_openvpn" \
-              -o BatchMode=yes \
-              -o ConnectTimeout=5 \
-              -o StrictHostKeyChecking=yes \
-              -o UserKnownHostsFile="${WORK_DIR}/known_hosts" \
-              "${OPENVPN_USER}@${OPENVPN_HOST}" \
-              'sudo systemctl is-active --quiet openvpnas && sudo /usr/local/openvpn_as/scripts/sacli status >/dev/null' \
-              2>/dev/null; then
-              echo "OpenVPN Access Server 已完成 Marketplace bootstrap。"
-              exit 0
-            fi
-
-            echo "等待 OpenVPN Access Server ready（${ATTEMPT}/60）..."
-            sleep 10
-          done
-
-          echo "::error title=OpenVPN Bootstrap Timeout::Access Server 未在 10 分鐘內 ready"
-          exit 1
+        run: bash "${GITHUB_WORKSPACE}/scripts/openvpn-bootstrap.sh" wait
 
       - name: Close OpenVPN Bootstrap Access
         if: always() && steps.openvpn-bootstrap.outputs.needed == 'true'
@@ -256,57 +196,7 @@ jobs:
           TF_VAR_openvpn_contact_email: ${{ env.OPENVPN_CONTACT_EMAIL }}
           TF_VAR_openvpn_bootstrap_http_enabled: "false"
           TF_VAR_trusted_admin_cidrs: "[]"
-        run: |
-          set +e
-          STATE_LIST=$(terraform state list 2>openvpn-bootstrap-cleanup-state.err)
-          STATE_EXIT=$?
-          set -e
-
-          if [ "${STATE_EXIT}" -ne 0 ]; then
-            cat openvpn-bootstrap-cleanup-state.err
-            echo "::error title=OpenVPN Cleanup Failed::無法讀取 Terraform state，拒絕略過 bootstrap cleanup"
-            exit "${STATE_EXIT}"
-          fi
-
-          if ! grep -Eq '^module\.openvpn\.linode_firewall\.openvpn(\[0\])?$' \
-            <<< "${STATE_LIST}"; then
-            echo "OpenVPN Firewall 尚未進入 Terraform state，無需執行 bootstrap cleanup。"
-            exit 0
-          fi
-
-          set +e
-          terraform plan \
-            -input=false \
-            -detailed-exitcode \
-            -target='module.openvpn.linode_firewall.openvpn' \
-            -out=openvpn-bootstrap-cleanup.tfplan \
-            > openvpn-bootstrap-cleanup-plan.log 2>&1
-          PLAN_EXIT=$?
-          set -e
-
-          grep -v -iE "^\s*(token|secret|pass[w]ord)\s*=" \
-            openvpn-bootstrap-cleanup-plan.log || true
-
-          case "${PLAN_EXIT}" in
-            0)
-              echo "OpenVPN bootstrap access 已關閉。"
-              ;;
-            2)
-              terraform apply \
-                -input=false \
-                -auto-approve \
-                openvpn-bootstrap-cleanup.tfplan \
-                > openvpn-bootstrap-cleanup-apply.log 2>&1
-              grep -v -iE "^\s*(token|secret|pass[w]ord)\s*=" \
-                openvpn-bootstrap-cleanup-apply.log || true
-              ;;
-            *)
-              echo "::error title=OpenVPN Cleanup Failed::無法產生 bootstrap cleanup plan"
-              exit 1
-              ;;
-          esac
-
-          rm -rf "${RUNNER_TEMP}/openvpn-bootstrap"
+        run: bash "${GITHUB_WORKSPACE}/scripts/openvpn-bootstrap.sh" close
 
       - name: Post Apply Summary
         if: always()

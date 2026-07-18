@@ -138,6 +138,11 @@ output "openvpn_instance_id" {
   value       = module.openvpn.instance_id
 }
 
+output "openvpn_firewall_id" {
+  description = "OpenVPN Linode Firewall ID。"
+  value       = module.openvpn.firewall_id
+}
+
 output "openvpn_public_ipv4" {
   description = "OpenVPN Linode public IPv4；供 Infra NodeBalancer allowlist 使用。"
   value       = module.openvpn.public_ipv4

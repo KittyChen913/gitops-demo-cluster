@@ -9,11 +9,29 @@ readonly OPENVPN_FIREWALL_PATTERN='^module\.openvpn\.linode_firewall\.openvpn(\[
 readonly READINESS_TIMEOUT_SECONDS=900
 readonly READINESS_RETRY_SECONDS=10
 readonly SSH_ATTEMPT_TIMEOUT_SECONDS=15
+readonly FIREWALL_VERIFY_ATTEMPTS=6
+readonly FIREWALL_VERIFY_RETRY_SECONDS=5
+readonly RUNNER_IP_RECHECK_ATTEMPTS=6
+readonly LINODE_API_BASE_URL='https://api.linode.com/v4'
 
 filter_terraform_log() {
   local log_file="$1"
 
   grep -v -iE '^\s*(token|secret|pass[w]ord)\s*=' "${log_file}" || true
+}
+
+linode_api_get() {
+  local api_path="$1"
+
+  : "${TF_VAR_linode_token:?TF_VAR_linode_token 未設定}"
+
+  curl --fail --silent --show-error \
+    --retry 2 \
+    --retry-all-errors \
+    --connect-timeout 10 \
+    --max-time 30 \
+    --header "Authorization: Bearer ${TF_VAR_linode_token}" \
+    "${LINODE_API_BASE_URL}${api_path}"
 }
 
 openvpn_requires_replacement() (
@@ -239,7 +257,7 @@ ensure_bootstrap_http_access() (
   trap 'rm -f -- "${plan_file}" "${plan_log}" "${apply_log}"' EXIT
 
   set +e
-  terraform plan \
+  TF_VAR_openvpn_bootstrap_http_enabled=true terraform plan \
     -input=false \
     -detailed-exitcode \
     -target='module.openvpn.linode_firewall.openvpn' \
@@ -278,6 +296,143 @@ ensure_bootstrap_http_access() (
   esac
 )
 
+refresh_bootstrap_admin_access() {
+  local bootstrap_http_enabled="$1"
+  local runner_ip
+  local trusted_admin_cidrs
+  local plan_file='openvpn-bootstrap-admin-refresh.tfplan'
+  local plan_log='openvpn-bootstrap-admin-refresh-plan.log'
+  local apply_log='openvpn-bootstrap-admin-refresh-apply.log'
+  local plan_exit
+  local apply_exit
+
+  runner_ip="$(bash "${GITHUB_WORKSPACE}/scripts/discover-runner-public-ip.sh")"
+  echo "::add-mask::${runner_ip}"
+  trusted_admin_cidrs="[\"${runner_ip}/32\"]"
+
+  if [[ "${TF_VAR_trusted_admin_cidrs:-[]}" == "${trusted_admin_cidrs}" ]]; then
+    return 0
+  fi
+
+  echo "runner 公開 IPv4 在 Terraform apply 後已變更，正在刷新 OpenVPN Firewall 管理白名單。"
+  export TF_VAR_openvpn_bootstrap_http_enabled="${bootstrap_http_enabled}"
+  export TF_VAR_trusted_admin_cidrs="${trusted_admin_cidrs}"
+
+  set +e
+  terraform plan \
+    -input=false \
+    -detailed-exitcode \
+    -target='module.openvpn.linode_firewall.openvpn' \
+    -out="${plan_file}" \
+    >"${plan_log}" 2>&1
+  plan_exit=$?
+  set -e
+
+  filter_terraform_log "${plan_log}"
+
+  case "${plan_exit}" in
+    0)
+      echo "OpenVPN Firewall 已包含目前 runner 管理白名單。"
+      ;;
+    2)
+      set +e
+      terraform apply \
+        -input=false \
+        -auto-approve \
+        "${plan_file}" \
+        >"${apply_log}" 2>&1
+      apply_exit=$?
+      set -e
+
+      filter_terraform_log "${apply_log}"
+      if [[ "${apply_exit}" -ne 0 ]]; then
+        rm -f -- "${plan_file}" "${plan_log}" "${apply_log}"
+        echo "::error title=OpenVPN Admin Access Refresh Failed::無法刷新 runner /32 管理白名單"
+        return "${apply_exit}"
+      fi
+      echo "已刷新 OpenVPN Firewall 的 runner /32 管理白名單。"
+      ;;
+    *)
+      rm -f -- "${plan_file}" "${plan_log}" "${apply_log}"
+      echo "::error title=OpenVPN Admin Access Refresh Failed::無法規劃 runner /32 管理白名單"
+      return 1
+      ;;
+  esac
+
+  rm -f -- "${plan_file}" "${plan_log}" "${apply_log}"
+}
+
+verify_bootstrap_firewall_access() {
+  local openvpn_host="$1"
+  local instance_id
+  local firewall_id
+  local expected_cidr
+  local instance_json
+  local firewall_json
+  local devices_json
+  local rules_json
+  local attempt
+  local instance_running=false
+  local firewall_enabled=false
+  local firewall_attached=false
+  local ssh_rule_matches=false
+  local public_ipv4_matches=false
+
+  instance_id="$(terraform output -raw openvpn_instance_id)"
+  firewall_id="$(terraform output -raw openvpn_firewall_id)"
+  expected_cidr="$(jq -er 'if length == 1 then .[0] else error("runner CIDR 數量必須為 1") end' \
+    <<< "${TF_VAR_trusted_admin_cidrs:-[]}")"
+
+  for attempt in $(seq 1 "${FIREWALL_VERIFY_ATTEMPTS}"); do
+    instance_json="$(linode_api_get "/linode/instances/${instance_id}")"
+    firewall_json="$(linode_api_get "/networking/firewalls/${firewall_id}")"
+    devices_json="$(linode_api_get "/networking/firewalls/${firewall_id}/devices")"
+    rules_json="$(linode_api_get "/networking/firewalls/${firewall_id}/rules")"
+
+    instance_running="$(jq -r '.status == "running"' <<< "${instance_json}")"
+    firewall_enabled="$(jq -r '.status == "enabled"' <<< "${firewall_json}")"
+    firewall_attached="$(jq -r --argjson instance_id "${instance_id}" \
+      'any(.data[]?; .entity.type == "linode" and .entity.id == $instance_id)' \
+      <<< "${devices_json}")"
+    ssh_rule_matches="$(jq -r --arg expected_cidr "${expected_cidr}" '
+      any(
+        .inbound[]?;
+        .action == "ACCEPT" and
+        (.protocol | ascii_upcase) == "TCP" and
+        .ports == "22" and
+        any(.addresses.ipv4[]?; . == $expected_cidr)
+      )
+    ' <<< "${rules_json}")"
+    public_ipv4_matches="$(jq -r --arg openvpn_host "${openvpn_host}" \
+      'any(.ipv4[]?; . == $openvpn_host)' \
+      <<< "${instance_json}")"
+
+    if [[ "${instance_running}" == "true" &&
+          "${firewall_enabled}" == "true" &&
+          "${firewall_attached}" == "true" &&
+          "${ssh_rule_matches}" == "true" &&
+          "${public_ipv4_matches}" == "true" ]]; then
+      echo "OpenVPN bootstrap access 驗證通過：instance running、Firewall enabled、attachment 與 runner /32 TCP/22 rule 均正確。"
+      return 0
+    fi
+
+    if ((attempt < FIREWALL_VERIFY_ATTEMPTS)); then
+      echo "等待 Linode Firewall bootstrap access 生效（第 ${attempt}/${FIREWALL_VERIFY_ATTEMPTS} 次）..."
+      sleep "${FIREWALL_VERIFY_RETRY_SECONDS}"
+    fi
+  done
+
+  echo "::group::OpenVPN Linode Firewall 診斷"
+  echo "instance_running=${instance_running}"
+  echo "firewall_enabled=${firewall_enabled}"
+  echo "firewall_attached_to_instance=${firewall_attached}"
+  echo "ssh_rule_matches_runner_cidr=${ssh_rule_matches}"
+  echo "terraform_host_matches_instance=${public_ipv4_matches}"
+  echo "::endgroup::"
+  echo "::error title=OpenVPN Bootstrap Access Invalid::Linode Firewall 或 instance bootstrap access 與 Terraform 預期不一致"
+  return 1
+}
+
 wait_for_marketplace_readiness() {
   local target_env="${TARGET_ENV:?TARGET_ENV 未設定}"
   local runner_temp="${RUNNER_TEMP:?RUNNER_TEMP 未設定}"
@@ -315,11 +470,19 @@ wait_for_marketplace_readiness() {
   printf '%s' "${private_key_b64}" | base64 --decode > "${work_dir}/id_openvpn"
   printf '%s %s\n' "${openvpn_host}" "${host_key}" > "${work_dir}/known_hosts"
 
+  refresh_bootstrap_admin_access "${bootstrap_http_enabled}"
+  verify_bootstrap_firewall_access "${openvpn_host}"
+
   deadline=$((SECONDS + READINESS_TIMEOUT_SECONDS))
   attempt=0
 
   while ((SECONDS < deadline)); do
     attempt=$((attempt + 1))
+
+    if ((attempt > 1 && (attempt - 1) % RUNNER_IP_RECHECK_ATTEMPTS == 0)); then
+      refresh_bootstrap_admin_access "${bootstrap_http_enabled}"
+      verify_bootstrap_firewall_access "${openvpn_host}"
+    fi
 
     set +e
     timeout --signal=TERM "${SSH_ATTEMPT_TIMEOUT_SECONDS}s" ssh \

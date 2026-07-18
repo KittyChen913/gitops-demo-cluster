@@ -195,7 +195,7 @@ jobs:
           TF_VAR_linode_token: ${{ env.LINODE_TOKEN }}
           TF_VAR_write_kubeconfig_files: "false"
           TF_VAR_openvpn_contact_email: ${{ env.OPENVPN_CONTACT_EMAIL }}
-          TF_VAR_openvpn_bootstrap_http_enabled: "true"
+          TF_VAR_openvpn_bootstrap_http_enabled: ${{ steps.openvpn-bootstrap.outputs.bootstrap_http }}
           TF_VAR_trusted_admin_cidrs: ${{ steps.openvpn-bootstrap.outputs.trusted_admin_cidrs }}
         run: bash "${GITHUB_WORKSPACE}/scripts/openvpn-bootstrap.sh" wait
 

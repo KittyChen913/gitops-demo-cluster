@@ -3,6 +3,11 @@ output "instance_id" {
   value       = linode_instance.openvpn.id
 }
 
+output "firewall_id" {
+  description = "OpenVPN Linode Firewall ID。"
+  value       = linode_firewall.openvpn.id
+}
+
 output "public_ipv4" {
   description = "OpenVPN Linode public IPv4。"
   value       = one(linode_instance.openvpn.ipv4)

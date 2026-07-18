@@ -35,11 +35,11 @@
 #   │  [初始化] bootstrap-backend                                     │
 #   │  AWS S3 bucket（版本控制 + 加密 + 封鎖公開存取）              │
 #   ├─────────────────────────────────────────────────────────────────┤
-#   │  [階段 1] apply-clusters                                        │
-#   │  terraform/environments/prod → 建立 LKE 與選用 OpenVPN         │
-#   │  寫入: SSM cluster metadata 與選用 OpenVPN deployment material │
+#   │  [階段 1] apply-infrastructure                                  │
+#   │  terraform/environments/prod → 建立 LKE 與固定 OpenVPN         │
+#   │  寫入: SSM cluster metadata 與 OpenVPN deployment material     │
 #   ├─────────────────────────────────────────────────────────────────┤
-#   │  [階段 2] apply-k8s          （needs: apply-clusters）           │
+#   │  [階段 2] apply-k8s          （needs: apply-infrastructure）     │
 #   │  terraform/environments/prod-k8s → ArgoCD SA/RBAC/Token        │
 #   │  讀取: S3 backend 中的 Phase 1 remote state                    │
 #   │  寫入: SSM token（SecureString）                               │
@@ -168,10 +168,10 @@ jobs:
     with:
       environment: prod
 
-  # ── Phase 1：建立 LKE Cluster 與選用 OpenVPN ────────────────────────────────
+  # ── Phase 1：建立 LKE Cluster 與固定 OpenVPN ────────────────────────────────
   # 注意: _tf-apply.yml 內部設定 `environment: prod`，執行前觸發手動批准門戳。
-  apply-clusters:
-    name: "Phase 1 — Apply Clusters [prod]"
+  apply-infrastructure:
+    name: "Phase 1 — Apply Infrastructure [prod]"
     needs: [preflight, bootstrap-backend]
     uses: ./.github/workflows/_tf-apply.yml
     secrets: inherit
@@ -185,7 +185,7 @@ jobs:
   # 注意: 同樣由 _tf-apply.yml 內部的 GitHub Environment "prod" 批准門戳把射。
   apply-k8s:
     name: "Phase 2 — Apply K8s SA/RBAC [prod]"
-    needs: [preflight, apply-clusters]
+    needs: [preflight, apply-infrastructure]
     uses: ./.github/workflows/_tf-apply.yml
     secrets: inherit
     with:
@@ -209,7 +209,7 @@ jobs:
   pipeline-summary:
     name: "Pipeline Summary"
     runs-on: ubuntu-latest
-    needs: [quality, preflight, bootstrap-backend, apply-clusters, apply-k8s, post-provision]
+    needs: [quality, preflight, bootstrap-backend, apply-infrastructure, apply-k8s, post-provision]
     if: always()
     steps:
       - name: Generate Pipeline Summary
@@ -231,7 +231,7 @@ jobs:
             echo "| Quality | actionlint + ShellCheck + Ansible checks | ${{ needs.quality.result }} |"
             echo "| Pre-flight | Validate OIDC prerequisites | ${{ needs.preflight.result }} |"
             echo "| Bootstrap | S3 bucket (native locking) | ${{ needs.bootstrap-backend.result }} |"
-            echo "| Phase 1 | Apply clusters | ${{ needs.apply-clusters.result }} |"
+            echo "| Phase 1 | Apply infrastructure | ${{ needs.apply-infrastructure.result }} |"
             echo "| Phase 2 | Apply k8s SA/RBAC | ${{ needs.apply-k8s.result }} |"
             echo "| Validation | Post-provision | ${{ needs.post-provision.result }} |"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -239,11 +239,11 @@ jobs:
       - name: Set pipeline result
         env:
           QUALITY_RESULT: ${{ needs.quality.result }}
-          CLUSTER_RESULT: ${{ needs.apply-clusters.result }}
+          INFRASTRUCTURE_RESULT: ${{ needs.apply-infrastructure.result }}
           K8S_RESULT:     ${{ needs.apply-k8s.result }}
         run: |
           if [ "${QUALITY_RESULT}" != "success" ] || \
-             [ "${CLUSTER_RESULT}" != "success" ] || \
+             [ "${INFRASTRUCTURE_RESULT}" != "success" ] || \
              [ "${K8S_RESULT}" != "success" ]; then
             echo "::error::Pipeline failed — production infrastructure may be in partial state"
             echo "Check logs and re-run after reviewing the terraform state."

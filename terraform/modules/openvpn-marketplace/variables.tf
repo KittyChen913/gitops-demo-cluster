@@ -69,6 +69,15 @@ variable "root_password" {
 variable "ssh_public_key" {
   description = "Terraform 產生、允許 Ansible 登入 OpenVPN Linode 的 SSH public key。"
   type        = string
+
+  validation {
+    condition = (
+      trimspace(var.ssh_public_key) != "" &&
+      !strcontains(trimspace(var.ssh_public_key), "\n") &&
+      !strcontains(trimspace(var.ssh_public_key), "\r")
+    )
+    error_message = "ssh_public_key 去除首尾空白後必須是非空的單行 SSH public key。"
+  }
 }
 
 variable "ssh_host_private_key" {

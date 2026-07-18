@@ -20,7 +20,7 @@ resource "linode_instance" "openvpn" {
   root_pass        = var.root_password
   stackscript_id   = var.stackscript_id
   stackscript_data = local.marketplace_stackscript_data
-  authorized_keys  = [var.ssh_public_key]
+  authorized_keys  = [trimspace(var.ssh_public_key)]
   firewall_id      = linode_firewall.openvpn.id
   tags             = var.tags
 

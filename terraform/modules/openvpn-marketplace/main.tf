@@ -6,6 +6,9 @@ locals {
     },
     var.stackscript_data,
   )
+
+  trusted_admin_ipv4_cidrs = [for cidr in var.trusted_admin_cidrs : cidr if !strcontains(cidr, ":")]
+  trusted_admin_ipv6_cidrs = [for cidr in var.trusted_admin_cidrs : cidr if strcontains(cidr, ":")]
 }
 
 resource "linode_instance" "openvpn" {
@@ -59,7 +62,7 @@ resource "linode_firewall" "openvpn" {
     protocol = upper(var.openvpn_protocol)
     ports    = tostring(var.openvpn_port)
     ipv4     = ["0.0.0.0/0"]
-    ipv6     = var.enable_ipv6 ? ["::/0"] : []
+    ipv6     = var.enable_ipv6 ? ["::/0"] : null
   }
 
   dynamic "inbound" {
@@ -71,7 +74,7 @@ resource "linode_firewall" "openvpn" {
       protocol = "TCP"
       ports    = "80"
       ipv4     = ["0.0.0.0/0"]
-      ipv6     = var.enable_ipv6 ? ["::/0"] : []
+      ipv6     = var.enable_ipv6 ? ["::/0"] : null
     }
   }
 
@@ -83,8 +86,8 @@ resource "linode_firewall" "openvpn" {
       action   = "ACCEPT"
       protocol = "TCP"
       ports    = "22"
-      ipv4     = [for cidr in var.trusted_admin_cidrs : cidr if !strcontains(cidr, ":")]
-      ipv6     = [for cidr in var.trusted_admin_cidrs : cidr if strcontains(cidr, ":")]
+      ipv4     = length(local.trusted_admin_ipv4_cidrs) > 0 ? local.trusted_admin_ipv4_cidrs : null
+      ipv6     = length(local.trusted_admin_ipv6_cidrs) > 0 ? local.trusted_admin_ipv6_cidrs : null
     }
   }
 
@@ -96,8 +99,8 @@ resource "linode_firewall" "openvpn" {
       action   = "ACCEPT"
       protocol = "TCP"
       ports    = tostring(var.admin_port)
-      ipv4     = [for cidr in var.trusted_admin_cidrs : cidr if !strcontains(cidr, ":")]
-      ipv6     = [for cidr in var.trusted_admin_cidrs : cidr if strcontains(cidr, ":")]
+      ipv4     = length(local.trusted_admin_ipv4_cidrs) > 0 ? local.trusted_admin_ipv4_cidrs : null
+      ipv6     = length(local.trusted_admin_ipv6_cidrs) > 0 ? local.trusted_admin_ipv6_cidrs : null
     }
   }
 }

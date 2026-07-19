@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
-# 封裝 Phase 1 的 OpenVPN Marketplace bootstrap 生命週期。
-# Workflow 只負責傳入環境與 Terraform 變數；本腳本不管理後續 Ansible desired state。
+# 封裝 Phase 1 的 OpenVPN Marketplace bootstrap 與 Admin credential 生命週期。
+# Workflow 只負責傳入環境與 Terraform 變數；本腳本不管理後續 Ansible network desired state。
 set -euo pipefail
 
 readonly OPENVPN_INSTANCE_PATTERN='^module\.openvpn\.linode_instance\.openvpn(\[0\])?$'
@@ -433,6 +433,183 @@ verify_bootstrap_firewall_access() {
   return 1
 }
 
+reconcile_openvpn_admin_credential() {
+  local target_env="$1"
+  local openvpn_host="$2"
+  local openvpn_user="$3"
+  local private_key_file="$4"
+  local known_hosts_file="$5"
+  local work_dir="$6"
+  local parameter_name="/gitops/${target_env}/openvpn/ansible/OPENVPN_ADMIN_PASSWORD"
+  local password_file="${work_dir}/admin-password"
+  local ssm_error_file="${work_dir}/admin-password-ssm-error.log"
+  local admin_password
+  local credential_exit
+  local get_parameter_exit
+  local parameter_exists=false
+
+  if [[ ! "${target_env}" =~ ^(dev|prod)$ ]]; then
+    echo "::error title=OpenVPN Admin Credential Failed::不支援的環境名稱"
+    return 1
+  fi
+
+  set +e
+  admin_password="$(aws ssm get-parameter \
+    --name "${parameter_name}" \
+    --with-decryption \
+    --query 'Parameter.Value' \
+    --output text \
+    2>"${ssm_error_file}")"
+  get_parameter_exit=$?
+  set -e
+
+  if [[ "${get_parameter_exit}" -eq 0 ]]; then
+    parameter_exists=true
+  elif grep -q 'ParameterNotFound' "${ssm_error_file}"; then
+    admin_password="$(openssl rand -hex 24)"
+  else
+    echo "::group::OpenVPN Admin password SSM 診斷"
+    cat "${ssm_error_file}"
+    echo "::endgroup::"
+    echo "::error title=OpenVPN Admin Credential Failed::無法讀取 Admin password SSM parameter"
+    return "${get_parameter_exit}"
+  fi
+
+  echo "::add-mask::${admin_password}"
+  if [[ "${#admin_password}" -lt 16 ]]; then
+    echo "::error title=OpenVPN Admin Credential Failed::SSM Admin password 長度不足 16 字元"
+    return 1
+  fi
+
+  install -m 0600 /dev/null "${password_file}"
+  printf '%s' "${admin_password}" > "${password_file}"
+  unset admin_password
+
+  if [[ "${parameter_exists}" == "true" ]]; then
+    aws ssm add-tags-to-resource \
+      --resource-type Parameter \
+      --resource-id "${parameter_name}" \
+      --tags \
+        "Key=Environment,Value=${target_env}" \
+        'Key=Component,Value=openvpn' \
+        'Key=ManagedBy,Value=github-actions'
+    echo "已沿用既有 OpenVPN Admin password SSM parameter。"
+  else
+    aws ssm put-parameter \
+      --name "${parameter_name}" \
+      --type SecureString \
+      --value "file://${password_file}" \
+      --tags \
+        "Key=Environment,Value=${target_env}" \
+        'Key=Component,Value=openvpn' \
+        'Key=ManagedBy,Value=github-actions' \
+      >/dev/null
+    echo "已建立 OpenVPN Admin password SSM SecureString。"
+  fi
+
+  # 密碼只透過 SSH stdin 傳送；遠端暫存檔會由 trap 在所有路徑移除。
+  # 遠端命令中的變數應由 VM shell 展開，不可由 runner 預先展開。
+  set +e
+  # shellcheck disable=SC2016
+  timeout --signal=TERM 120s ssh \
+    -i "${private_key_file}" \
+    -o BatchMode=yes \
+    -o ConnectTimeout=5 \
+    -o ServerAliveInterval=5 \
+    -o ServerAliveCountMax=1 \
+    -o StrictHostKeyChecking=yes \
+    -o UserKnownHostsFile="${known_hosts_file}" \
+    "${openvpn_user}@${openvpn_host}" \
+    'set -euo pipefail
+     umask 077
+     password_file="$(mktemp "${HOME}/.openvpn-admin-password.XXXXXX")"
+     trap '\''rm -f -- "${password_file}"'\'' EXIT
+     cat > "${password_file}"
+
+     if [[ ! -s "${password_file}" ]] || [[ "$(wc -c < "${password_file}")" -lt 16 ]]; then
+       exit 30
+     fi
+
+     sacli=/usr/local/openvpn_as/scripts/sacli
+     authcli=/usr/local/openvpn_as/scripts/authcli
+     admin_password="$(<"${password_file}")"
+     user_props_json="$(sudo -n "${sacli}" --pfilt openvpn UserPropGet)"
+
+     read_prop() {
+       python3 -c '\''import json, sys
+data = json.load(sys.stdin).get("openvpn", {})
+value = data.get(sys.argv[1], "")
+print(str(value).lower() if isinstance(value, bool) else value)'\'' "$1" <<< "${user_props_json}"
+     }
+
+     auth_succeeds() {
+       local auth_output
+       auth_output="$(sudo -n "${authcli}" --user openvpn --pass "${admin_password}" 2>/dev/null)" &&
+         grep -Eq '\''^[[:space:]]*status[[:space:]]*:[[:space:]]*SUCCEED[[:space:]]*$'\'' <<< "${auth_output}"
+     }
+
+     changed=false
+     if [[ "$(read_prop user_auth_type)" != "local" ]]; then
+       sudo -n "${sacli}" --user openvpn --key user_auth_type --value local UserPropPut >/dev/null
+       changed=true
+     fi
+     if [[ "$(read_prop prop_superuser)" != "true" ]]; then
+       sudo -n "${sacli}" --user openvpn --key prop_superuser --value true UserPropPut >/dev/null
+       changed=true
+     fi
+     if [[ "$(read_prop prop_deny)" != "false" ]]; then
+       sudo -n "${sacli}" --user openvpn --key prop_deny --value false UserPropPut >/dev/null
+       changed=true
+     fi
+     if ! auth_succeeds; then
+       sudo -n "${sacli}" --user openvpn --new_pass "${admin_password}" SetLocalPassword >/dev/null
+       changed=true
+     fi
+
+     if [[ "${changed}" == "true" ]]; then
+       sudo -n "${sacli}" start >/dev/null
+     fi
+
+     for attempt in {1..12}; do
+       if auth_succeeds; then
+         exit 0
+       fi
+       sleep 5
+     done
+     exit 31' \
+    < "${password_file}"
+  credential_exit=$?
+  set -e
+
+  rm -f -- "${password_file}" "${ssm_error_file}"
+
+  case "${credential_exit}" in
+    0)
+      echo "OpenVPN Admin password 已套用至 openvpn 帳號，且 authcli 驗證成功。"
+      ;;
+    30)
+      echo "::error title=OpenVPN Admin Credential Failed::遠端收到的 Admin password 無效"
+      return 1
+      ;;
+    31)
+      echo "::error title=OpenVPN Admin Credential Failed::authcli 未能驗證套用後的 openvpn 帳號密碼"
+      return 1
+      ;;
+    124)
+      echo "::error title=OpenVPN Admin Credential Failed::Admin credential 遠端同步超過 120 秒"
+      return 1
+      ;;
+    255)
+      echo "::error title=OpenVPN Admin Credential Failed::Admin credential 同步期間 SSH 連線失敗"
+      return 1
+      ;;
+    *)
+      echo "::error title=OpenVPN Admin Credential Failed::遠端同步失敗（exit code ${credential_exit}）"
+      return 1
+      ;;
+  esac
+}
+
 wait_for_marketplace_readiness() {
   local target_env="${TARGET_ENV:?TARGET_ENV 未設定}"
   local runner_temp="${RUNNER_TEMP:?RUNNER_TEMP 未設定}"
@@ -504,6 +681,13 @@ wait_for_marketplace_readiness() {
 
     if [[ "${ssh_exit}" -eq 0 ]]; then
       echo "OpenVPN Access Server 已完成 Marketplace bootstrap。"
+      reconcile_openvpn_admin_credential \
+        "${target_env}" \
+        "${openvpn_host}" \
+        "${openvpn_user}" \
+        "${work_dir}/id_openvpn" \
+        "${work_dir}/known_hosts" \
+        "${work_dir}"
       return 0
     fi
 
@@ -544,7 +728,12 @@ close_bootstrap_access() {
   local plan_exit
   local apply_exit
 
-  rm -f "${work_dir}/id_openvpn" "${work_dir}/known_hosts" "${work_dir}/ssh-error.log"
+  rm -f \
+    "${work_dir}/id_openvpn" \
+    "${work_dir}/known_hosts" \
+    "${work_dir}/ssh-error.log" \
+    "${work_dir}/admin-password" \
+    "${work_dir}/admin-password-ssm-error.log"
   rmdir "${work_dir}" 2>/dev/null || true
 
   set +e

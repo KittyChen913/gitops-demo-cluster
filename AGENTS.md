@@ -41,7 +41,7 @@
 - 保持變更範圍小而清楚；不要順手重構無關檔案。
 - Terraform 環境應保持 dev/prod 對稱。修改 dev 時，評估 prod 是否需要等價變更；若刻意不同，請在文件或註解中說明原因。
 - Phase 1 與 Phase 2 的依賴順序不可顛倒。`*-k8s` 環境必須依賴對應 Phase 1 remote state。
-- OpenVPN 是 dev/prod 的固定環境元件；不得重新加入環境層級的啟用開關。Linode、Firewall 與 generated credentials 必須隨 Phase 1 建立。
+- OpenVPN 是 dev/prod 的固定環境元件；不得重新加入環境層級的啟用開關。Linode、Firewall 與 SSH generated credentials 必須隨 Phase 1 建立；Admin password 則由 Phase 1 bootstrap workflow 建立或沿用。
 - OpenVPN Terraform 與 Ansible 不得管理 `argocd-server`、`argocd-server-private` 或其他 Kubernetes object；這些資源屬於下游 GitOps repo。
 - 不要將 Argo CD 安裝、本體設定、Application/ApplicationSet 或 app manifests 加入本 repo。
 - 文件使用繁體中文為主；程式碼、變數、workflow id 與 script 名稱維持英文。
@@ -79,7 +79,7 @@
   - `/gitops/<env>/openvpn/ansible/OPENVPN_ADMIN_PASSWORD`
   - `/gitops/<env>/openvpn/ansible/OPENVPN_SSH_PRIVATE_KEY_B64`
   - `/gitops/<env>/openvpn/ansible/OPENVPN_SSH_HOST_KEY`
-- OpenVPN root password、Admin password、SSH user key 與 SSH host key 必須由 Terraform `random` / `tls` resources 產生；不得提交或放入 GitHub Secrets。Root password 只供 Linode `root_pass` 使用並保留於 Terraform state；只有 Admin password、SSH user private key 與 SSH host public key 會在 `write_ssm_parameters=true` 時寫入 OpenVPN SSM 參數。
+- OpenVPN root password、SSH user key 與 SSH host key 必須由 Terraform `random` / `tls` resources 產生；不得提交或放入 GitHub Secrets。Root password 只供 Linode `root_pass` 使用並保留於 Terraform state；SSH user private key 與 SSH host public key 會在 `write_ssm_parameters=true` 時寫入 OpenVPN SSM 參數。Admin password 不得由 Terraform 管理或寫入 state；Phase 1 bootstrap workflow 必須在 Access Server ready 後建立或沿用 SSM SecureString、以 `sacli` 套用到 `openvpn` 帳號，並以 `authcli` 驗證。
 - 除 contact email 外，OpenVPN infrastructure desired state 由 dev/prod `openvpn.tf` 的 defaults 管理，Internal DNS、split route 與 network desired state 則集中於 `openvpn_network.tf`；contact email 由 CI 從 SSM `/gitops/shared/OPENVPN_CONTACT_EMAIL` 注入，不依賴未提交的 `terraform.tfvars` 或 GitHub Environment Variables。
 - 新增 Worker Cluster 時，需同步檢查：
   - Phase 1 `locals.tf` 的 `worker_clusters`
@@ -128,6 +128,7 @@
 ## OpenVPN 與 Ansible 規範
 
 - `openvpn-configure.yml` 執行前必須確認 OpenVPN 已啟用、Phase 1 apply 成功、`write_ssm_parameters=true`，且 Marketplace Access Server 已 ready。
+- Phase 1 bootstrap workflow 必須在 readiness 成功後同步 `OPENVPN_ADMIN_PASSWORD`；既有 SSM 值應沿用，全新環境才在 runner 產生，且不得把值輸出至 log、Terraform state 或 GitHub Secrets。
 - 各環境首次建立 OpenVPN 時，apply workflow 只能對當次 runner `/32` 暫開管理連線；Let’s Encrypt HTTP-01 所需 TCP/80 必須在 bootstrap 期間對 public IPv4 開放，Access Server healthy 後由 workflow 再次 apply 關閉 TCP/80 並移除 runner CIDR。
 - `openvpn-configure.yml` 只能在執行期間對當次 runner `/32` 暫開 TCP/22 與 TCP/943，所有成功或失敗路徑都必須嘗試恢復空的 `trusted_admin_cidrs`。
 - VM host UFW 固定允許 TCP/22 與 TCP/943，來源限制只由 inbound policy 為 `DROP` 的 Linode Firewall 管理，避免動態 runner 在 SSH 前無法先修改 UFW。
@@ -139,7 +140,7 @@
 ## 安全與破壞性操作
 
 - 不要主動執行 `terraform apply`、`terraform destroy`、`kubectl delete`、`gh workflow run terraform-destroy.yml` 等會改變或刪除雲端資源的命令，除非使用者明確要求。
-- 若使用者要求 destroy，必須再次確認環境與順序：先 Phase 2 `*-k8s`，再 Phase 1。Phase 1 destroy 也會移除該環境啟用的 OpenVPN Linode、Firewall、generated credentials 與 SSM 參數。
+- 若使用者要求 destroy，必須再次確認環境與順序：先 Phase 2 `*-k8s`，再 Phase 1。Phase 1 destroy 會移除該環境的 OpenVPN Linode、Firewall、Terraform generated credentials 與 Terraform 管理的 SSM 參數；bootstrap 管理的 `OPENVPN_ADMIN_PASSWORD` 會保留供同環境重建沿用，若要刪除必須另行明確授權。
 - destroy workflow 必須只允許 `workflow_dispatch`，由 environment choice 決定目標，並與 apply 共用 `tf-apply-<env>` concurrency group；prod 必須保留 GitHub Environment approval。
 - destroy 執行方式應先 `terraform state list` 判斷是否有 managed resources，再用 `terraform plan -destroy -detailed-exitcode -out=tfdestroy` 與 `terraform apply tfdestroy`；不要直接改成 `terraform destroy -auto-approve`。
 - destroy 不刪除 S3 backend bucket，保留 state backend 供日後重新 apply。

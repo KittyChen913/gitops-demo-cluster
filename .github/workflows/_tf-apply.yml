@@ -36,7 +36,7 @@ on:
         type: string
         required: true
       prepare_openvpn_bootstrap:
-        description: "是否暫時開放 runner /32 並檢查 OpenVPN readiness；TCP/80 僅用於建立或 replacement"
+        description: "是否暫時開放 runner /32、檢查 OpenVPN readiness 並同步 Admin credential"
         type: boolean
         required: false
         default: false
@@ -186,8 +186,8 @@ jobs:
           TF_VAR_openvpn_bootstrap_http_enabled: ${{ steps.openvpn-bootstrap.outputs.bootstrap_http }}
           TF_VAR_trusted_admin_cidrs: ${{ steps.openvpn-bootstrap.outputs.trusted_admin_cidrs }}
 
-      # ── OpenVPN readiness：Phase 1 每次檢查並關閉暫時權限 ──────────────────
-      - name: Wait for OpenVPN Marketplace Readiness
+      # ── OpenVPN bootstrap：檢查 readiness、同步 Admin credential 並關閉暫時權限 ──
+      - name: Reconcile OpenVPN Marketplace Bootstrap
         if: steps.openvpn-bootstrap.outputs.needed == 'true' && steps.apply.outcome == 'success'
         env:
           TARGET_ENV: ${{ inputs.environment }}
@@ -220,7 +220,7 @@ jobs:
             echo "| Environment | \`${{ inputs.environment }}\` |"
             echo "| Phase | \`${{ inputs.plan_key }}\` |"
             echo "| Outcome | \`${{ steps.apply.outcome }}\` |"
-            echo "| OpenVPN readiness | \`${{ steps.openvpn-bootstrap.outputs.needed }}\` |"
+            echo "| OpenVPN bootstrap reconciliation | \`${{ steps.openvpn-bootstrap.outputs.needed }}\` |"
             echo "| OpenVPN replacement | \`${{ steps.openvpn-bootstrap.outputs.replacement }}\` |"
             echo "| Commit | \`${{ github.sha }}\` |"
             echo "| Actor | @${{ github.actor }} |"

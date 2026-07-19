@@ -15,6 +15,7 @@ write_kubeconfig_files = true
 # openvpn_instance_type  = "g6-standard-1"
 # openvpn_stackscript_id = 401719
 # openvpn_admin_username = "vpnadmin"
+# openvpn_admin_password_version = 1 # 需要輪替 Access Server Admin password 時遞增
 # CI 從 SSM 注入 contact email；本機請用 TF_VAR_openvpn_contact_email，勿提交實際值。
 # openvpn_enable_ipv6      = false
 # openvpn_bootstrap_http_enabled = false # CI 初次建立時會暫開並在 ready 後自動關閉

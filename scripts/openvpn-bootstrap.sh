@@ -446,7 +446,6 @@ reconcile_openvpn_admin_credential() {
   local admin_password
   local credential_exit
   local get_parameter_exit
-  local parameter_exists=false
 
   if [[ ! "${target_env}" =~ ^(dev|prod)$ ]]; then
     echo "::error title=OpenVPN Admin Credential Failed::不支援的環境名稱"
@@ -463,15 +462,11 @@ reconcile_openvpn_admin_credential() {
   get_parameter_exit=$?
   set -e
 
-  if [[ "${get_parameter_exit}" -eq 0 ]]; then
-    parameter_exists=true
-  elif grep -q 'ParameterNotFound' "${ssm_error_file}"; then
-    admin_password="$(openssl rand -hex 24)"
-  else
+  if [[ "${get_parameter_exit}" -ne 0 ]]; then
     echo "::group::OpenVPN Admin password SSM 診斷"
     cat "${ssm_error_file}"
     echo "::endgroup::"
-    echo "::error title=OpenVPN Admin Credential Failed::無法讀取 Admin password SSM parameter"
+    echo "::error title=OpenVPN Admin Credential Failed::無法讀取 Terraform 管理的 Admin password SSM parameter"
     return "${get_parameter_exit}"
   fi
 
@@ -484,28 +479,6 @@ reconcile_openvpn_admin_credential() {
   install -m 0600 /dev/null "${password_file}"
   printf '%s' "${admin_password}" > "${password_file}"
   unset admin_password
-
-  if [[ "${parameter_exists}" == "true" ]]; then
-    aws ssm add-tags-to-resource \
-      --resource-type Parameter \
-      --resource-id "${parameter_name}" \
-      --tags \
-        "Key=Environment,Value=${target_env}" \
-        'Key=Component,Value=openvpn' \
-        'Key=ManagedBy,Value=github-actions'
-    echo "已沿用既有 OpenVPN Admin password SSM parameter。"
-  else
-    aws ssm put-parameter \
-      --name "${parameter_name}" \
-      --type SecureString \
-      --value "file://${password_file}" \
-      --tags \
-        "Key=Environment,Value=${target_env}" \
-        'Key=Component,Value=openvpn' \
-        'Key=ManagedBy,Value=github-actions' \
-      >/dev/null
-    echo "已建立 OpenVPN Admin password SSM SecureString。"
-  fi
 
   # 密碼只透過 SSH stdin 傳送；遠端暫存檔會由 trap 在所有路徑移除。
   # 遠端命令中的變數應由 VM shell 展開，不可由 runner 預先展開。

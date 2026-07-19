@@ -109,6 +109,20 @@ resource "aws_ssm_parameter" "openvpn_root_password" {
   }
 }
 
+resource "aws_ssm_parameter" "openvpn_admin_password" {
+  count = var.write_ssm_parameters ? 1 : 0
+
+  name  = "/gitops/${local.environment}/openvpn/ansible/OPENVPN_ADMIN_PASSWORD"
+  type  = "SecureString"
+  value = random_password.openvpn_admin.result
+
+  tags = {
+    Environment = local.environment
+    Component   = "openvpn"
+    ManagedBy   = "terraform"
+  }
+}
+
 resource "aws_ssm_parameter" "openvpn_ssh_private_key" {
   count = var.write_ssm_parameters ? 1 : 0
 

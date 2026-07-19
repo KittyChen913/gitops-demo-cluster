@@ -1,0 +1,3 @@
+---
+# Access Server 內建管理帳號固定與 Marketplace 產生的 Linux sudo 使用者分離。
+openvpn_as_admin_username: openvpn

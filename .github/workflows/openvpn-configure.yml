@@ -200,6 +200,7 @@ jobs:
       - name: Validate protected inputs
         run: |
           for REQUIRED_VAR in \
+            OPENVPN_ADMIN_PASSWORD \
             OPENVPN_SSH_PRIVATE_KEY_B64 \
             OPENVPN_SSH_HOST_KEY; do
             if [ -z "${!REQUIRED_VAR:-}" ]; then
@@ -210,6 +211,11 @@ jobs:
 
           if ! printf '%s' "${OPENVPN_SSH_PRIVATE_KEY_B64}" | base64 --decode >/dev/null; then
             echo "::error title=Invalid SSM Parameter::OPENVPN_SSH_PRIVATE_KEY_B64 is not valid base64"
+            exit 1
+          fi
+
+          if [ "${#OPENVPN_ADMIN_PASSWORD}" -lt 16 ]; then
+            echo "::error title=Invalid SSM Parameter::OPENVPN_ADMIN_PASSWORD must contain at least 16 characters"
             exit 1
           fi
 

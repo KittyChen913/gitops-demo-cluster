@@ -4,6 +4,10 @@
   become: true
   gather_facts: true
 
+  vars:
+    # 密碼只從執行程序環境讀取，不寫入 inventory 或 vars 檔案。
+    openvpn_admin_password: "{{ lookup('ansible.builtin.env', 'OPENVPN_ADMIN_PASSWORD') }}"
+
   pre_tasks:
     - name: 等待 SSH 可用
       ansible.builtin.wait_for_connection:
@@ -21,11 +25,18 @@
         path: /usr/local/openvpn_as/scripts/sacli
       register: openvpn_sacli
 
+    - name: 確認 Access Server 認證工具存在
+      ansible.builtin.stat:
+        path: /usr/local/openvpn_as/scripts/authcli
+      register: openvpn_authcli
+
     - name: 拒絕在非 Access Server 主機繼續
       ansible.builtin.assert:
         that:
           - openvpn_sacli.stat.exists
           - openvpn_sacli.stat.executable
+          - openvpn_authcli.stat.exists
+          - openvpn_authcli.stat.executable
           - internal_dns_server_ip == openvpn_server_tunnel_ip
           - argocd_internal_fqdn == 'argocd.' ~ internal_domain
           - argocd_destination_cidr == argocd_endpoint_host ~ '/32'

@@ -77,9 +77,10 @@
   - `/gitops/<env>/clusters/<cluster-label>/ca-cert`
   - `/gitops/<env>/clusters/<cluster-label>/token`
   - `/gitops/<env>/openvpn/terraform/OPENVPN_ROOT_PASSWORD`
+  - `/gitops/<env>/openvpn/ansible/OPENVPN_ADMIN_PASSWORD`
   - `/gitops/<env>/openvpn/ansible/OPENVPN_SSH_PRIVATE_KEY_B64`
   - `/gitops/<env>/openvpn/ansible/OPENVPN_SSH_HOST_KEY`
-- OpenVPN root password、SSH user key 與 SSH host key 必須由 Terraform `random` / `tls` resources 產生；不得提交或放入 GitHub Secrets。只有 `write_ssm_parameters=true` 時才寫入 OpenVPN SSM 參數。
+- OpenVPN root password、Admin password、SSH user key 與 SSH host key 必須由 Terraform `random` / `tls` resources 產生；不得提交或放入 GitHub Secrets。只有 `write_ssm_parameters=true` 時才寫入 OpenVPN SSM 參數。
 - 除 contact email 外，OpenVPN infrastructure desired state 由 dev/prod `openvpn.tf` 的 defaults 管理，Internal DNS、split route 與 network desired state 則集中於 `openvpn_network.tf`；contact email 由 CI 從 SSM `/gitops/shared/OPENVPN_CONTACT_EMAIL` 注入，不依賴未提交的 `terraform.tfvars` 或 GitHub Environment Variables。
 - 新增 Worker Cluster 時，需同步檢查：
   - Phase 1 `locals.tf` 的 `worker_clusters`

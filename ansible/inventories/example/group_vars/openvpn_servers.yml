@@ -15,3 +15,4 @@ openvpn_port: 1194
 openvpn_protocol: udp
 openvpn_admin_port: 943
 openvpn_as_route_index: 99
+# 實際管理密碼必須透過 OPENVPN_ADMIN_PASSWORD 環境變數提供，不得寫入 inventory。

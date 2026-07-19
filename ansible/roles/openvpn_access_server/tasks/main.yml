@@ -1,4 +1,122 @@
 ---
+- name: 驗證 Access Server 管理密碼
+  ansible.builtin.assert:
+    that:
+      - openvpn_admin_password is string
+      - openvpn_admin_password | length >= 16
+    fail_msg: "OPENVPN_ADMIN_PASSWORD 缺少或長度不足。"
+  no_log: true
+
+- name: 讀取 Access Server 管理帳號屬性
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/sacli
+      - --pfilt
+      - "{{ openvpn_as_admin_username }}"
+      - UserPropGet
+  register: openvpn_admin_user_prop_query
+  changed_when: false
+  no_log: true
+
+- name: 解析 Access Server 管理帳號屬性
+  ansible.builtin.set_fact:
+    openvpn_admin_user_props: "{{ (openvpn_admin_user_prop_query.stdout | from_json).get(openvpn_as_admin_username, {}) }}"
+  no_log: true
+
+- name: 驗證 Terraform 管理的 Access Server 管理密碼
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/authcli
+      - --user
+      - "{{ openvpn_as_admin_username }}"
+      - --pass
+      - "{{ openvpn_admin_password }}"
+  register: openvpn_admin_auth_check
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: 確保 Access Server 管理帳號使用 local authentication
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/sacli
+      - --user
+      - "{{ openvpn_as_admin_username }}"
+      - --key
+      - user_auth_type
+      - --value
+      - local
+      - UserPropPut
+  when: openvpn_admin_user_props.get('user_auth_type', '') != 'local'
+  register: openvpn_admin_auth_type_update
+  no_log: true
+
+- name: 確保 Access Server 管理帳號具有管理權限
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/sacli
+      - --user
+      - "{{ openvpn_as_admin_username }}"
+      - --key
+      - prop_superuser
+      - --value
+      - "true"
+      - UserPropPut
+  when: openvpn_admin_user_props.get('prop_superuser', 'false') | string | lower != 'true'
+  register: openvpn_admin_superuser_update
+  no_log: true
+
+- name: 解除 Access Server 管理帳號的拒絕登入狀態
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/sacli
+      - --user
+      - "{{ openvpn_as_admin_username }}"
+      - --key
+      - prop_deny
+      - --value
+      - "false"
+      - UserPropPut
+  when: openvpn_admin_user_props.get('prop_deny', 'false') | string | lower == 'true'
+  register: openvpn_admin_deny_update
+  no_log: true
+
+- name: 判斷是否需要更新 Access Server 管理密碼
+  ansible.builtin.set_fact:
+    openvpn_admin_password_update_required: >-
+      {{
+        openvpn_admin_auth_check.rc != 0 or
+        (openvpn_admin_auth_check.stdout |
+          regex_search('(?m)^\\s*status\\s*:\\s*SUCCEED\\s*$')) is none
+      }}
+  no_log: true
+
+- name: 套用 Terraform 管理的 Access Server 管理密碼
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/sacli
+      - --user
+      - "{{ openvpn_as_admin_username }}"
+      - --new_pass
+      - "{{ openvpn_admin_password }}"
+      - SetLocalPassword
+  when: openvpn_admin_password_update_required
+  register: openvpn_admin_password_update
+  no_log: true
+
+- name: 套用 Access Server 管理帳號變更
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/sacli
+      - start
+  when: >-
+    (openvpn_admin_auth_type_update.changed | default(false)) or
+    (openvpn_admin_superuser_update.changed | default(false)) or
+    (openvpn_admin_deny_update.changed | default(false)) or
+    (openvpn_admin_password_update.changed | default(false))
+  changed_when: true
+  no_log: true
+
 - name: 讀取 Access Server ConfigDB
   ansible.builtin.command:
     argv:

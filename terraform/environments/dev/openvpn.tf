@@ -62,6 +62,17 @@ variable "openvpn_admin_port" {
   default     = 943
 }
 
+variable "openvpn_admin_password_version" {
+  description = "OpenVPN Access Server Admin password 輪替版本；遞增時會產生並發布新密碼。"
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.openvpn_admin_password_version >= 1 && floor(var.openvpn_admin_password_version) == var.openvpn_admin_password_version
+    error_message = "openvpn_admin_password_version 必須是大於或等於 1 的整數。"
+  }
+}
+
 variable "openvpn_public_ipv4" {
   description = "選用的預期 public IPv4；只核對 instance 實際位址，不會保留、配置或重新附加 IP。"
   type        = string
@@ -103,6 +114,20 @@ resource "random_password" "openvpn_root" {
   min_numeric      = 4
   min_special      = 4
   override_special = "_%@-"
+}
+
+resource "random_password" "openvpn_admin" {
+  length           = 32
+  special          = true
+  min_lower        = 4
+  min_upper        = 4
+  min_numeric      = 4
+  min_special      = 4
+  override_special = "_%@-"
+
+  keepers = {
+    version = tostring(var.openvpn_admin_password_version)
+  }
 }
 
 resource "tls_private_key" "openvpn_ssh" {

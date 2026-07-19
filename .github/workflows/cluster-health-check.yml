@@ -1,12 +1,10 @@
 # =============================================================================
 # cluster-health-check.yml — 獨立 Cluster 健康檢查
 # =============================================================================
-# 排程僅在 Repository Variable `DAILY_CLUSTER_HEALTH_CHECK_ENABLED` 為 `true` 時
-# 檢查 dev 與 prod；手動執行必須指定單一 cluster，
-# workflow_call 則可檢查指定 environment 的單一或全部 cluster。
+# 手動執行必須指定單一 cluster，workflow_call 則可檢查指定 environment
+# 的單一或全部 cluster。
 # workflow 會探索目標 environment 的 cluster，建立 environment + cluster matrix，
 # 再為每個 cluster 載入獨立的 SSM path 並執行 check-cluster-health.sh。
-# 排程失敗會建立或更新 incident issue，恢復後自動關閉。
 # =============================================================================
 
 name: "Cluster Health Check"
@@ -24,9 +22,6 @@ on:
         description: "Specific cluster label"
         type: string
         required: true
-
-  schedule:
-    - cron: "17 6 * * *"
 
   workflow_call:
     inputs:
@@ -51,7 +46,6 @@ jobs:
   discover-targets:
     name: "Discover Cluster Targets"
     runs-on: ubuntu-latest
-    if: github.event_name != 'schedule' || vars.DAILY_CLUSTER_HEALTH_CHECK_ENABLED == 'true'
 
     permissions:
       id-token: write
@@ -87,11 +81,7 @@ jobs:
           INPUT_ENV: ${{ inputs.environment }}
           LABEL_INPUT: ${{ inputs.cluster_label }}
         run: |
-          if [ "${EVENT_NAME}" = "schedule" ]; then
-            ENVIRONMENTS="dev prod"
-          else
-            ENVIRONMENTS="${INPUT_ENV}"
-          fi
+          ENVIRONMENTS="${INPUT_ENV}"
 
           if [ "${EVENT_NAME}" = "workflow_dispatch" ] &&
             [ -z "${LABEL_INPUT//[[:space:]]/}" ]; then
@@ -154,7 +144,6 @@ jobs:
     runs-on: ubuntu-latest
     needs: discover-targets
     if: >-
-      (github.event_name != 'schedule' || vars.DAILY_CLUSTER_HEALTH_CHECK_ENABLED == 'true') &&
       always() &&
       needs.discover-targets.outputs.count != '0'
 
@@ -221,13 +210,10 @@ jobs:
     name: "Cluster Health Gate"
     runs-on: ubuntu-latest
     needs: [discover-targets, health-check]
-    if: >-
-      (github.event_name != 'schedule' || vars.DAILY_CLUSTER_HEALTH_CHECK_ENABLED == 'true') &&
-      always()
+    if: always()
 
     permissions:
       contents: read
-      issues: write
 
     outputs:
       result: ${{ steps.evaluate.outputs.result }}
@@ -264,103 +250,6 @@ jobs:
             echo "| Health matrix | ${{ needs.health-check.result }} |"
             echo "| Overall result | ${{ steps.evaluate.outputs.result }} |"
           } >> "${GITHUB_STEP_SUMMARY}"
-
-      - name: Create or Update Incident Issue
-        if: github.event_name == 'schedule' && steps.evaluate.outputs.result != 'success'
-        uses: actions/github-script@v7
-        env:
-          CHECK_ENVS: ${{ needs.discover-targets.outputs.environments || 'unknown' }}
-          CLUSTER_COUNT: ${{ needs.discover-targets.outputs.count || '0' }}
-          DISCOVERY_FAILURES: ${{ needs.discover-targets.outputs.discovery_failures || 'none' }}
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const labels = ['cluster-health-failure', 'incident'];
-            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-
-            for (const name of labels) {
-              try {
-                await github.rest.issues.getLabel({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  name,
-                });
-              } catch (error) {
-                if (error.status !== 404) throw error;
-                await github.rest.issues.createLabel({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  name,
-                  color: name === 'incident' ? 'd73a4a' : 'fbca04',
-                  description: 'Managed by the scheduled cluster health workflow',
-                });
-              }
-            }
-
-            const { data: issues } = await github.rest.issues.listForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              labels: ['cluster-health-failure'],
-              state: 'open',
-            });
-
-            const body = [
-              '## Cluster Health Check Failure',
-              '',
-              `**Environments:** ${process.env.CHECK_ENVS}`,
-              `**Clusters discovered:** ${process.env.CLUSTER_COUNT}`,
-              `**Discovery failures:** ${process.env.DISCOVERY_FAILURES}`,
-              `**Run:** [View Actions Run](${runUrl})`,
-              `**Detected:** ${new Date().toISOString()}`,
-              '',
-              'Review the matrix jobs and step summaries to identify the unhealthy cluster.',
-            ].join('\n');
-
-            if (issues.length === 0) {
-              await github.rest.issues.create({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                title: 'Cluster Health Check Failure',
-                body,
-                labels,
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issues[0].number,
-                body: `### Health Check Still Failing\n\n${body}`,
-              });
-            }
-
-      - name: Close Incident Issue on Recovery
-        if: github.event_name == 'schedule' && steps.evaluate.outputs.result == 'success'
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const { data: issues } = await github.rest.issues.listForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              labels: ['cluster-health-failure'],
-              state: 'open',
-            });
-            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-
-            for (const issue of issues) {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issue.number,
-                body: `Cluster health recovered. [View Actions Run](${runUrl})`,
-              });
-              await github.rest.issues.update({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issue.number,
-                state: 'closed',
-              });
-            }
 
       - name: Enforce Result
         if: steps.evaluate.outputs.result != 'success'

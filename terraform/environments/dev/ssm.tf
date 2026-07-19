@@ -95,20 +95,6 @@ resource "aws_ssm_parameter" "worker_ca_cert" {
 
 # ── OpenVPN deployment credentials ──────────────────────────────────────────
 
-resource "aws_ssm_parameter" "openvpn_root_password" {
-  count = var.write_ssm_parameters ? 1 : 0
-
-  name  = "/gitops/${local.environment}/openvpn/terraform/OPENVPN_ROOT_PASSWORD"
-  type  = "SecureString"
-  value = random_password.openvpn_root.result
-
-  tags = {
-    Environment = local.environment
-    Component   = "openvpn"
-    ManagedBy   = "terraform"
-  }
-}
-
 resource "aws_ssm_parameter" "openvpn_admin_password" {
   count = var.write_ssm_parameters ? 1 : 0
 

@@ -15,8 +15,6 @@ terraform.tfvars
 *.auto.tfvars
 .env
 .env.*
-ansible/inventories/local/
-ansible/**/*.vault.yml
 
 # 產生的 kubeconfig
 kubeconfigs/

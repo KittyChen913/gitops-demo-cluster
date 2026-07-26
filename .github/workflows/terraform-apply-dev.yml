@@ -21,14 +21,14 @@
 # 執行順序：
 #   ┌─────────────────────────────────────────────────────────────────┐
 #   │  [品質閘門] workflow-quality.yml                                 │
-#   │  actionlint + ShellCheck + Ansible lint/syntax                   │
+#   │  actionlint + ShellCheck                                         │
 #   ├─────────────────────────────────────────────────────────────────┤
 #   │  [初始化] bootstrap-backend                                     │
 #   │  AWS S3 bucket（版本控制 + 加密 + 封鎖公開存取）              │
 #   ├─────────────────────────────────────────────────────────────────┤
 #   │  [階段 1] apply-infrastructure                                  │
-#   │  terraform/environments/dev → 建立 LKE 與固定 OpenVPN          │
-#   │  寫入: SSM cluster metadata 與 OpenVPN deployment material     │
+#   │  terraform/environments/dev → 建立 LKE Cluster                  │
+#   │  寫入: SSM cluster metadata                                   │
 #   ├─────────────────────────────────────────────────────────────────┤
 #   │  [階段 2] apply-k8s          （needs: apply-infrastructure）     │
 #   │  terraform/environments/dev-k8s → ArgoCD SA/RBAC/Token         │
@@ -135,7 +135,7 @@ jobs:
     with:
       environment: ${{ needs.preflight.outputs.target_env }}
 
-  # ── Phase 1：建立 LKE Cluster 與固定 OpenVPN ────────────────────────────────
+  # ── Phase 1：建立 LKE Cluster ──────────────────────────────────────────────
   apply-infrastructure:
     name: "Phase 1 — Apply Infrastructure [${{ needs.preflight.outputs.target_env }}]"
     needs: [preflight, bootstrap-backend]
@@ -145,7 +145,6 @@ jobs:
       environment: ${{ needs.preflight.outputs.target_env }}
       tf_dir: "terraform/environments/${{ needs.preflight.outputs.target_env }}"
       plan_key: "${{ needs.preflight.outputs.target_env }}-clusters"
-      prepare_openvpn_bootstrap: true
 
   # ── 階段 2：ArgoCD SA / RBAC / Token ───────────────────────────────────────────────
   apply-k8s:
@@ -192,7 +191,7 @@ jobs:
             echo ""
             echo "| Stage | Job | Status |"
             echo "|-------|-----|--------|"
-            echo "| Quality | actionlint + ShellCheck + Ansible checks | ${{ needs.quality.result }} |"
+            echo "| Quality | actionlint + ShellCheck | ${{ needs.quality.result }} |"
             echo "| Pre-flight | Validate OIDC prerequisites | ${{ needs.preflight.result }} |"
             echo "| Bootstrap | S3 bucket (native locking) | ${{ needs.bootstrap-backend.result }} |"
             echo "| Phase 1 | Apply infrastructure | ${{ needs.apply-infrastructure.result }} |"

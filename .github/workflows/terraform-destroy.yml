@@ -82,11 +82,6 @@ jobs:
             exit 1
           fi
 
-          if [[ ! "${OPENVPN_CONTACT_EMAIL:-}" =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ ]]; then
-            echo "::error title=Missing Parameter::SSM parameter /gitops/shared/OPENVPN_CONTACT_EMAIL is missing or invalid"
-            exit 1
-          fi
-
       # 必須趁 Kubernetes API 仍可連線時，先移除 Phase 2 資源。
       - name: Plan Phase 2 Destroy
         id: plan_k8s
@@ -172,7 +167,6 @@ jobs:
         working-directory: terraform/environments/${{ inputs.environment }}
         env:
           TF_VAR_linode_token: ${{ env.LINODE_TOKEN }}
-          TF_VAR_openvpn_contact_email: ${{ env.OPENVPN_CONTACT_EMAIL }}
         run: |
           terraform init \
             -backend-config=backend.hcl \
@@ -232,7 +226,6 @@ jobs:
         working-directory: terraform/environments/${{ inputs.environment }}
         env:
           TF_VAR_linode_token: ${{ env.LINODE_TOKEN }}
-          TF_VAR_openvpn_contact_email: ${{ env.OPENVPN_CONTACT_EMAIL }}
         run: |
           set +e
           terraform apply -auto-approve -no-color tfdestroy \

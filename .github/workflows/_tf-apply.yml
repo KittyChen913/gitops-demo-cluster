@@ -35,11 +35,6 @@ on:
         description: "Unique apply phase label (e.g., dev-clusters)"
         type: string
         required: true
-      prepare_openvpn_bootstrap:
-        description: "是否暫時開放 runner /32、檢查 OpenVPN readiness 並同步 Admin credential"
-        type: boolean
-        required: false
-        default: false
     secrets:
       AWS_ACCOUNT_ID:
         description: "AWS account ID used by the OIDC role ARN"
@@ -97,13 +92,6 @@ jobs:
         with:
           ssm_param_path: "/gitops/shared"
 
-      - name: Validate OpenVPN Contact Email
-        run: |
-          if [[ ! "${OPENVPN_CONTACT_EMAIL:-}" =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ ]]; then
-            echo "::error title=Missing Parameter::SSM parameter /gitops/shared/OPENVPN_CONTACT_EMAIL is missing or invalid"
-            exit 1
-          fi
-
       - name: Terraform Init
         run: |
           terraform init \
@@ -112,17 +100,6 @@ jobs:
             -input=false
         env:
           TF_VAR_linode_token: ${{ env.LINODE_TOKEN }}
-
-      - name: Resolve OpenVPN Bootstrap Access
-        id: openvpn-bootstrap
-        env:
-          BOOTSTRAP_REQUESTED: ${{ inputs.prepare_openvpn_bootstrap }}
-          TF_VAR_linode_token: ${{ env.LINODE_TOKEN }}
-          TF_VAR_write_kubeconfig_files: "false"
-          TF_VAR_openvpn_contact_email: ${{ env.OPENVPN_CONTACT_EMAIL }}
-          TF_VAR_openvpn_bootstrap_http_enabled: "false"
-          TF_VAR_trusted_admin_cidrs: "[]"
-        run: bash "${GITHUB_WORKSPACE}/scripts/openvpn-bootstrap.sh" resolve
 
       # ── Apply：以同一份 plan 套用 Phase 1 或 Phase 2 desired state ───────────
       - name: Terraform Plan (pre-apply)
@@ -155,9 +132,6 @@ jobs:
         env:
           TF_VAR_linode_token: ${{ env.LINODE_TOKEN }}
           TF_VAR_write_kubeconfig_files: "false"
-          TF_VAR_openvpn_contact_email: ${{ env.OPENVPN_CONTACT_EMAIL }}
-          TF_VAR_openvpn_bootstrap_http_enabled: ${{ steps.openvpn-bootstrap.outputs.bootstrap_http }}
-          TF_VAR_trusted_admin_cidrs: ${{ steps.openvpn-bootstrap.outputs.trusted_admin_cidrs }}
 
       - name: Terraform Apply
         id: apply
@@ -182,32 +156,6 @@ jobs:
         env:
           TF_VAR_linode_token: ${{ env.LINODE_TOKEN }}
           TF_VAR_write_kubeconfig_files: "false"
-          TF_VAR_openvpn_contact_email: ${{ env.OPENVPN_CONTACT_EMAIL }}
-          TF_VAR_openvpn_bootstrap_http_enabled: ${{ steps.openvpn-bootstrap.outputs.bootstrap_http }}
-          TF_VAR_trusted_admin_cidrs: ${{ steps.openvpn-bootstrap.outputs.trusted_admin_cidrs }}
-
-      # ── OpenVPN bootstrap：檢查 readiness、同步 Admin credential 並關閉暫時權限 ──
-      - name: Reconcile OpenVPN Marketplace Bootstrap
-        if: steps.openvpn-bootstrap.outputs.needed == 'true' && steps.apply.outcome == 'success'
-        env:
-          TARGET_ENV: ${{ inputs.environment }}
-          BOOTSTRAP_HTTP_ENABLED: ${{ steps.openvpn-bootstrap.outputs.bootstrap_http }}
-          TF_VAR_linode_token: ${{ env.LINODE_TOKEN }}
-          TF_VAR_write_kubeconfig_files: "false"
-          TF_VAR_openvpn_contact_email: ${{ env.OPENVPN_CONTACT_EMAIL }}
-          TF_VAR_openvpn_bootstrap_http_enabled: ${{ steps.openvpn-bootstrap.outputs.bootstrap_http }}
-          TF_VAR_trusted_admin_cidrs: ${{ steps.openvpn-bootstrap.outputs.trusted_admin_cidrs }}
-        run: bash "${GITHUB_WORKSPACE}/scripts/openvpn-bootstrap.sh" wait
-
-      - name: Close OpenVPN Bootstrap Access
-        if: always() && steps.openvpn-bootstrap.outputs.needed == 'true' && steps.apply.outcome != 'skipped'
-        env:
-          TF_VAR_linode_token: ${{ env.LINODE_TOKEN }}
-          TF_VAR_write_kubeconfig_files: "false"
-          TF_VAR_openvpn_contact_email: ${{ env.OPENVPN_CONTACT_EMAIL }}
-          TF_VAR_openvpn_bootstrap_http_enabled: "false"
-          TF_VAR_trusted_admin_cidrs: "[]"
-        run: bash "${GITHUB_WORKSPACE}/scripts/openvpn-bootstrap.sh" close
 
       - name: Post Apply Summary
         if: always()
@@ -220,8 +168,6 @@ jobs:
             echo "| Environment | \`${{ inputs.environment }}\` |"
             echo "| Phase | \`${{ inputs.plan_key }}\` |"
             echo "| Outcome | \`${{ steps.apply.outcome }}\` |"
-            echo "| OpenVPN bootstrap reconciliation | \`${{ steps.openvpn-bootstrap.outputs.needed }}\` |"
-            echo "| OpenVPN replacement | \`${{ steps.openvpn-bootstrap.outputs.replacement }}\` |"
             echo "| Commit | \`${{ github.sha }}\` |"
             echo "| Actor | @${{ github.actor }} |"
           } >> "$GITHUB_STEP_SUMMARY"

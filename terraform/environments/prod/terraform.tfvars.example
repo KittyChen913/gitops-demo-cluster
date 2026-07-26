@@ -9,20 +9,3 @@ worker_node_count   = 3
 write_kubeconfig_files = true
 
 # linode_token = ""  # 建議使用：export LINODE_TOKEN="..."
-
-# OpenVPN 是固定建立的環境元件；root/admin password 與 SSH user/host keys 均由 Terraform 產生。
-# openvpn_server_label   = "openvpn-prod"
-# openvpn_instance_type  = "g6-standard-1"
-# openvpn_stackscript_id = 401719
-# openvpn_admin_username = "vpnadmin"
-# openvpn_admin_password_version = 1 # 需要輪替 Access Server Admin password 時遞增
-# CI 從 SSM 注入 contact email；本機請用 TF_VAR_openvpn_contact_email，勿提交實際值。
-# openvpn_enable_ipv6      = false
-# openvpn_bootstrap_http_enabled = false # CI 初次建立時會暫開並在 ready 後自動關閉
-# openvpn_tunnel_cidr      = "172.27.224.0/20"
-# internal_domain          = "prod.gitops.internal"
-# argocd_endpoint_port     = 443
-# trusted_admin_cidrs 不屬於穩態設定，僅由 workflow 暫時注入 runner /32。
-# upstream_dns_servers     = ["1.1.1.1", "1.0.0.1"]
-# openvpn_as_route_index   = 99
-# openvpn_public_ipv4      = null # 可填入預期 IP 作相等性核對；不會保留或重新附加 IP

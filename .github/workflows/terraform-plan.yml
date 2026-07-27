@@ -96,14 +96,14 @@ jobs:
 
           PLAN_REQUIRED=false
           if echo "${CHANGED}" | grep -qE \
-            "^(terraform/|config/worker-firewall/|scripts/verify-cluster-boundary-plan\.sh$|\.github/workflows/(terraform-plan|_tf-plan)\.yml$|\.github/actions/)"; then
+            "^(terraform/|config/worker-firewall/|scripts/verify-cluster-boundary-plan\.sh$|tests/test-cluster-boundary-plan\.sh$|\.github/workflows/(terraform-plan|_tf-plan)\.yml$|\.github/actions/)"; then
             PLAN_REQUIRED=true
           fi
 
           # 共用 Terraform / CI 元件變更可能影響全部環境。
           SHARED_CHANGED=false
           if echo "${CHANGED}" | grep -qE \
-            "^(terraform/modules/|terraform/environments/bootstrap/|scripts/verify-cluster-boundary-plan\.sh$|\.github/workflows/(terraform-plan|_tf-plan)\.yml$|\.github/actions/)"; then
+            "^(terraform/modules/|terraform/environments/bootstrap/|scripts/verify-cluster-boundary-plan\.sh$|tests/test-cluster-boundary-plan\.sh$|\.github/workflows/(terraform-plan|_tf-plan)\.yml$|\.github/actions/)"; then
             SHARED_CHANGED=true
             echo "偵測到共用元件變更 — 將執行全部環境 plan"
           fi

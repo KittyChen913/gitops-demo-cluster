@@ -58,6 +58,7 @@ on:
       - ".github/actions/**"
       - "config/worker-firewall/dev.json"
       - "scripts/**"
+      - "tests/**"
       - "terraform/environments/dev/**"
       - "terraform/environments/dev-k8s/**"
       - "terraform/environments/bootstrap/**"

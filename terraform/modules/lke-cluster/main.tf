@@ -25,6 +25,21 @@ resource "linode_lke_cluster" "this" {
   region      = var.region
   tags        = local.cluster_tags
 
+  dynamic "control_plane" {
+    for_each = var.control_plane_acl == null ? [] : [var.control_plane_acl]
+
+    content {
+      acl {
+        enabled = control_plane.value.enabled
+
+        addresses {
+          ipv4 = control_plane.value.ipv4_addresses
+          ipv6 = control_plane.value.ipv6_addresses
+        }
+      }
+    }
+  }
+
   dynamic "pool" {
     for_each = var.node_pools
     content {

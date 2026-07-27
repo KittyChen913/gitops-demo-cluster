@@ -50,6 +50,15 @@ output "pool" {
   value       = linode_lke_cluster.this.pool
 }
 
+output "node_instance_ids" {
+  description = "Linode instance IDs for all nodes in this cluster's pools."
+  value = flatten([
+    for pool in linode_lke_cluster.this.pool : [
+      for node in pool.nodes : node.instance_id
+    ]
+  ])
+}
+
 output "cluster_role" {
   description = "Declared cluster role."
   value       = var.cluster_role

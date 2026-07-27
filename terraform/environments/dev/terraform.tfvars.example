@@ -9,3 +9,6 @@ worker_node_count   = 2
 write_kubeconfig_files = true
 
 # linode_token = ""  # 建議使用：export LINODE_TOKEN="..."
+
+# Cluster Firewall／Control Plane ACL activation與evidence-backed rules由
+# config/worker-firewall/dev.json管理，不在tfvars重複定義。

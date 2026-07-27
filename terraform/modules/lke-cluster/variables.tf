@@ -58,6 +58,29 @@ variable "node_pools" {
   }))
 }
 
+variable "control_plane_acl" {
+  description = "Optional LKE Control Plane ACL. Use null until VPN access evidence is verified."
+  type = object({
+    enabled        = bool
+    ipv4_addresses = set(string)
+    ipv6_addresses = optional(set(string), [])
+  })
+  default = null
+
+  validation {
+    condition = var.control_plane_acl == null || (
+      var.control_plane_acl.enabled &&
+      length(setunion(
+        var.control_plane_acl.ipv4_addresses,
+        var.control_plane_acl.ipv6_addresses
+      )) > 0 &&
+      !contains(var.control_plane_acl.ipv4_addresses, "0.0.0.0/0") &&
+      !contains(var.control_plane_acl.ipv6_addresses, "::/0")
+    )
+    error_message = "control_plane_acl must be null or enabled with at least one non-global CIDR."
+  }
+}
+
 variable "tags" {
   description = "Additional Linode tags applied to the cluster."
   type        = list(string)

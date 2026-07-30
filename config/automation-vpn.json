@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "identity": "ci-cluster",
+  "profile_ssm_path": "/gitops/platform-access/automation/ci-cluster/PROFILE",
+  "password_ssm_path": "/gitops/platform-access/automation/ci-cluster/PASSWORD",
+  "shared_interface": "KittyChen913/gitops-demo-platform-access/.github/actions/open-automation-vpn-tunnel@35bcef7b05a8d4b18526f3a6cb3761c04ea03d8c",
+  "close_interface": "KittyChen913/gitops-demo-platform-access/.github/actions/close-automation-vpn-tunnel@35bcef7b05a8d4b18526f3a6cb3761c04ea03d8c",
+  "environments": {
+    "dev": {
+      "target_parameter_paths": [
+        "/gitops/dev/clusters/lke-dev-mgmt/api-endpoint",
+        "/gitops/dev/clusters/lke-dev-ateam/api-endpoint"
+      ]
+    },
+    "prod": {
+      "target_parameter_paths": [
+        "/gitops/prod/clusters/lke-prod-mgmt/api-endpoint",
+        "/gitops/prod/clusters/lke-prod-ateam/api-endpoint"
+      ]
+    }
+  }
+}

@@ -131,6 +131,8 @@
 - node attachment只從LKE pool output推導，不手工維護instance IDs；新增或replacement node必須自動受同一Firewall保護。
 - NodeBalancer Firewall不能取代Cluster Firewall；DNS也不是authorization boundary。
 - runtime evidence未完成時使用`NOT_RUNTIME_VERIFIED`與停用adapter，不得因此猜測allowlist或啟用default-deny。
+- 需要連線Kubernetes API server建立ArgoCD SA/RBAC/token的apply（`dev-k8s`／`prod-k8s`，判斷式為`enforce_cluster_boundary=false`）改經`config/automation-vpn.json`定義的automation VPN tunnel連線Management／Worker Cluster API endpoint，避免被只允許VPN來源的Control Plane ACL擋下；tunnel open/close由`gitops-demo-platform-access`提供的composite action負責，本repo不得重新實作或內嵌VPN client邏輯。
+- `config/automation-vpn.json`的`target_parameter_paths`必須對應SSM上實際存在的`/gitops/<env>/clusters/<cluster-label>/api-endpoint`；新增Worker Cluster時需同步更新此清單。
 
 ## 安全與破壞性操作
 

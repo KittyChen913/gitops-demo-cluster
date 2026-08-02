@@ -55,14 +55,17 @@
 - 專有名詞、產品名稱、API、Kubernetes 資源種類、欄位名稱、命令、路徑與識別字可保留英文，但英文專有名詞必須放在中文敘述中，不得以完整英文句子撰寫註解。
 - `Management Cluster`、`Worker Cluster`、`Cluster` 與 `S3 State Bucket` 均視為專有名詞，不得翻譯成中文，也不得使用其他大小寫變體。
 - 複數形式必須寫成 `Management Clusters`、`Worker Clusters` 與 `S3 State Buckets`。
-- README、docs、Terraform description、workflow 顯示文字、summary 與人工維護的執行訊息也必須遵守相同的專有名詞大小寫。
+- README 與 docs 使用繁體中文敘述，並遵守相同的專有名詞大小寫。
+- Workflow／job／step、composite action 的 `name` 與 `description` 必須使用英文。
+- 程式碼內的文字必須使用英文，包括 Terraform `description`／`error_message`、CLI／UI 文字、log、error、warning、summary 與其他執行訊息；但等待／重試迴圈中即時印給人類觀察進度的狀態訊息（例如第幾次嘗試、剩餘秒數、失敗原因、逾時後的診斷輸出）例外，使用繁體中文。
+- 產品名稱的唯一允許拼法為 `ArgoCD`。
 - 自動生成檔案（例如 `.terraform.lock.hcl`）的生成器註解、shebang、lint directive 與被註解掉的程式碼不需翻譯或改寫。
 
 ## Terraform 規範
 
 - Terraform CLI 最低版本為 `>= 1.10.0`，以支援 S3 backend 的 `use_lockfile` 原生鎖定。
-- 變更 Terraform 後，至少執行 `terraform fmt -recursive`。
-- 對受影響環境執行 `terraform -chdir=<env-dir> validate`；若 backend 或 provider 初始化不足，先說明限制，不要假裝已驗證。
+- Terraform validation 必須依全域「最小必要 Validation」規範，針對實際受影響的 module、root 與 consumers 選擇 formatting check、`terraform validate` 或其他直接檢核；不得預設執行 recursive formatting 或所有環境。
+- 需要 `terraform validate` 時，只驗證受影響 root；若 backend 或 provider 初始化不足，標示 `BLOCKED` 或 `NOT RUN` 並說明未取得的信心，不得假裝已驗證。
 - 不要提交 `terraform.tfvars`、`.terraform/`、plan binary、local state 或 kubeconfig。
 - `terraform.tfvars.example` 應提交並包含所有必要變數鍵、合理預設值與機敏欄位留空註解；實際 `terraform.tfvars` 必須保持 gitignored。
 - `region` 與 `aws_region` 由各環境 `variables.tf` 的 `default` 管理，不使用 GitHub Repository Variables。`*-k8s` 環境只需 `aws_region`。
@@ -98,7 +101,7 @@
 - Provider token 由 `.github/actions/get-ssm-parameters` 從 `/gitops/shared` 讀取後注入環境；workflow 不可引用 `secrets.LINODE_TOKEN`。
 - CI Terraform 步驟必須設定 `TF_VAR_write_kubeconfig_files=false`，避免 kubeconfig 寫入 runner 磁碟。
 - Terraform plan/apply/destroy log 必須過濾 `token`、`secret`、`password`、`pass[word]` 等敏感行。
-- 修改workflow後使用actionlint；修改`scripts/*.sh`後使用ShellCheck。
+- Workflow 與 composite action 的本機 validation 應依實際 syntax、expression、Shell execution path 與直接 consumers 選擇 `actionlint`、ShellCheck 或相關 contract checks，不得預設執行完整工具集合。
 - Reusable workflows 的 `permissions`、`secrets: inherit`、OIDC 與 concurrency 設定不可隨意移除。
 - 呼叫 reusable workflow 時若被呼叫方需要 repository secret，必須加 `secrets: inherit`。
 - `.github/actions/**` 是 workflow 依賴的一部分；調整 workflow path filter 時，應確保 composite action 變更能觸發必要的 quality/plan 驗證。
@@ -115,7 +118,7 @@
 ## Script 規範
 
 - Shell scripts 以 Bash 撰寫，維持可在 GitHub Actions runner 執行。
-- 修改 scripts 後執行 ShellCheck。
+- Shell validation 應聚焦受影響 script 與直接 caller；只有 shared helper 或跨 workflow execution path 受影響時才擴大範圍。
 - 不要在 logs 輸出 token、kubeconfig、secret value、password 或完整 sensitive Terraform output。
 - 健康檢查與驗證腳本主要依賴：
   - `CLUSTER_ENV`
@@ -156,25 +159,19 @@
 - `cluster_label` 空值代表從對應 Phase 1 remote state 的非機密 `cluster_ids` output 探索所有受管 cluster；指定 label 時必須確認它存在於該 state，找不到 cluster 時應失敗，不可靜默成功。SSM 只提供逐叢集連線資料，不作為 cluster inventory。
 - health/post-provision/destroy 等 workflow 結束時應寫入 `$GITHUB_STEP_SUMMARY`，清楚列出 environment、結果與失敗數或 phase 狀態。
 
-## 建議驗證命令
-
-依變更內容選擇最小必要驗證：
+## 可用 Validation 入口
 
 ```bash
-terraform fmt -recursive
-terraform -chdir=terraform/environments/dev validate
-terraform -chdir=terraform/environments/dev-k8s validate
-terraform -chdir=terraform/environments/prod validate
-terraform -chdir=terraform/environments/prod-k8s validate
-shellcheck scripts/*.sh
-actionlint
+terraform fmt -check <affected-paths>
+terraform -chdir=<affected-root> validate
+shellcheck <affected-scripts>
+actionlint <affected-workflow-or-action-files>
 ```
 
-若使用 Docker 版 actionlint：
-
-```bash
-docker run --rm -v "$PWD:/repo" --workdir /repo rhysd/actionlint:1.7.12 -color
-```
+- 上述命令只是 repository 既有入口，不是固定清單；每次依實際變更風險選擇最小子集。
+- 只有 shared module、shared workflow、cross-environment contract、局部 validation 失敗且證據指向相依範圍，或使用者明確要求時，才擴大至其他 roots、scripts 或 workflows。
+- 完整 Quality Gate、Terraform plan、post-provision 與 health validation 屬 PR、merge、release、deployment 或獨立驗收階段，不得在每次局部修改後自動執行。
+- 使用 Container 執行 validation 時，依全域安全 Container 規則使用本機既有 Image、停用 network、唯讀掛載 repository 並限制權限；不在此文件維護較寬鬆的替代命令。
 
 ## 文件同步
 
@@ -190,5 +187,5 @@ docker run --rm -v "$PWD:/repo" --workdir /repo rhysd/actionlint:1.7.12 -color
 ## 回覆使用者時
 
 - 使用繁體中文，除非使用者要求其他語言。
-- 說明實際修改了哪些檔案、做了哪些驗證、哪些驗證因缺少工具或憑證而無法執行。
+- 說明實際修改範圍、判定出的風險、每項 validation 的風險對應、刻意未執行的較大範圍驗證，以及因缺少工具或憑證而無法執行的項目。
 - 對 prod、destroy、secret、state 相關事項保持明確與保守。

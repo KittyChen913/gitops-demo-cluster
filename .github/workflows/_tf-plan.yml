@@ -31,6 +31,11 @@ on:
         description: "Unique plan label (e.g., dev-clusters, dev-k8s)"
         type: string
         required: true
+      enforce_cluster_boundary:
+        description: "Validate the Phase 1 saved plan against the Cluster boundary contract"
+        type: boolean
+        required: false
+        default: false
     secrets:
       AWS_ACCOUNT_ID:
         description: "AWS account ID used by the OIDC role ARN"
@@ -114,6 +119,18 @@ jobs:
         env:
           TF_VAR_linode_token: ${{ env.LINODE_TOKEN }}
           TF_VAR_write_kubeconfig_files: "false"
+
+      - name: Validate Cluster Boundary Plan
+        if: inputs.enforce_cluster_boundary
+        env:
+          TARGET_ENV: ${{ inputs.environment }}
+          CONTRACT_PATH: ${{ github.workspace }}/config/worker-firewall/${{ inputs.environment }}.json
+        run: |
+          terraform show -json tfplan > tfplan.json
+          bash "${GITHUB_WORKSPACE}/scripts/verify-cluster-boundary-plan.sh" \
+            "${TARGET_ENV}" \
+            "${CONTRACT_PATH}" \
+            tfplan.json
 
       - name: Post Plan Summary
         if: always()

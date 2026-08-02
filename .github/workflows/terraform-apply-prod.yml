@@ -36,7 +36,7 @@
 #   │  AWS S3 bucket（版本控制 + 加密 + 封鎖公開存取）              │
 #   ├─────────────────────────────────────────────────────────────────┤
 #   │  [階段 1] apply-infrastructure                                  │
-#   │  terraform/environments/prod → 建立 LKE Cluster                 │
+#   │  terraform/environments/prod → 建立 LKE 與 Cluster boundary    │
 #   │  寫入: SSM cluster metadata                                   │
 #   ├─────────────────────────────────────────────────────────────────┤
 #   │  [階段 2] apply-k8s          （needs: apply-infrastructure）     │
@@ -168,7 +168,7 @@ jobs:
     with:
       environment: prod
 
-  # ── Phase 1：建立 LKE Cluster ──────────────────────────────────────────────
+  # ── Phase 1：建立 LKE Cluster 與 Cluster boundary ──────────────────────────
   # 注意: _tf-apply.yml 內部設定 `environment: prod`，執行前觸發手動批准門戳。
   apply-infrastructure:
     name: "Phase 1 — Apply Infrastructure [prod]"
@@ -179,6 +179,7 @@ jobs:
       environment: prod
       tf_dir: "terraform/environments/prod"
       plan_key: "prod-clusters"
+      enforce_cluster_boundary: true
 
   # ── 階段 2：ArgoCD SA / RBAC / Token ───────────────────────────────────────────────
   # 注意: 同樣由 _tf-apply.yml 內部的 GitHub Environment "prod" 批准門戳把射。

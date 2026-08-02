@@ -96,14 +96,14 @@ jobs:
 
           PLAN_REQUIRED=false
           if echo "${CHANGED}" | grep -qE \
-            "^(terraform/|\.github/workflows/(terraform-plan|_tf-plan)\.yml$|\.github/actions/)"; then
+            "^(terraform/|config/worker-firewall/|scripts/verify-cluster-boundary-plan\.sh$|\.github/workflows/(terraform-plan|_tf-plan)\.yml$|\.github/actions/)"; then
             PLAN_REQUIRED=true
           fi
 
           # 共用 Terraform / CI 元件變更可能影響全部環境。
           SHARED_CHANGED=false
           if echo "${CHANGED}" | grep -qE \
-            "^(terraform/modules/|terraform/environments/bootstrap/|\.github/workflows/(terraform-plan|_tf-plan)\.yml$|\.github/actions/)"; then
+            "^(terraform/modules/|terraform/environments/bootstrap/|scripts/verify-cluster-boundary-plan\.sh$|\.github/workflows/(terraform-plan|_tf-plan)\.yml$|\.github/actions/)"; then
             SHARED_CHANGED=true
             echo "偵測到共用元件變更 — 將執行全部環境 plan"
           fi
@@ -112,7 +112,7 @@ jobs:
             local path_pattern="$1"
             if [ "${SHARED_CHANGED}" = "true" ]; then
               echo "true"
-            elif echo "${CHANGED}" | grep -q "^${path_pattern}"; then
+            elif echo "${CHANGED}" | grep -qE "^(${path_pattern})"; then
               echo "true"
             else
               echo "false"
@@ -120,9 +120,9 @@ jobs:
           }
 
           {
-            echo "dev_clusters=$(check_path 'terraform/environments/dev/')"
+            echo "dev_clusters=$(check_path 'terraform/environments/dev/|config/worker-firewall/dev\.json$')"
             echo "dev_k8s=$(check_path 'terraform/environments/dev-k8s/')"
-            echo "prod_clusters=$(check_path 'terraform/environments/prod/')"
+            echo "prod_clusters=$(check_path 'terraform/environments/prod/|config/worker-firewall/prod\.json$')"
             echo "prod_k8s=$(check_path 'terraform/environments/prod-k8s/')"
             echo "plan_required=${PLAN_REQUIRED}"
           } >> "$GITHUB_OUTPUT"
@@ -138,6 +138,7 @@ jobs:
       environment: "dev"
       tf_dir: "terraform/environments/dev"
       plan_key: "dev-clusters"
+      enforce_cluster_boundary: true
 
   # ── Terraform 規劃：dev-k8s ──────────────────────────────────────────────────
   plan-dev-k8s:
@@ -162,6 +163,7 @@ jobs:
       environment: "prod"
       tf_dir: "terraform/environments/prod"
       plan_key: "prod-clusters"
+      enforce_cluster_boundary: true
 
   # ── Terraform 規劃：prod-k8s ─────────────────────────────────────────────────
   plan-prod-k8s:

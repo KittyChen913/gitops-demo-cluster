@@ -4,35 +4,37 @@
 
 ## 專案定位
 
-本 repo 負責以 Terraform 管理 Linode Kubernetes Engine (LKE) 叢集生命週期與 Marketplace OpenVPN 存取層，並將叢集連線資訊及 OpenVPN 自動產生的部署憑證寫入 AWS SSM Parameter Store。
+本 repo負責以Terraform管理Linode Kubernetes Engine (LKE) Cluster lifecycle、Node Pool、Cluster Firewall、Management Cluster Control Plane ACL、Argo CD cluster access與cluster connection SSM parameters。
 
 專案邊界：
 
-- 本 repo 管理 LKE 叢集、dev/prod 隔離、ArgoCD 用 ServiceAccount / RBAC / token，以及 OpenVPN Linode、Linode Firewall、dnsmasq、Access Server routing 與 host firewall 設定。
+- 本 repo管理LKE Cluster、dev/prod隔離、Management／Worker Cluster Firewall、Management Cluster Control Plane ACL，以及Argo CD用ServiceAccount / RBAC / token。
 - 不在本 repo 安裝 Argo CD 本體、建立 GitOps bootstrap manifest，或管理應用程式 workload。
-- OpenVPN 僅提供到內部端點的存取層；`argocd-server-private` Service、NodeBalancer 與其 Cloud Firewall 仍由 `gitops-demo-infra` 管理。
+- Shared OpenVPN、VPN Server Firewall、Internal DNS、routing、NAT、groups與credential bootstrap由 `gitops-demo-platform-access` 管理；不得重新加入本repo。
+- Shared OpenVPN建立於獨立Linode VM，不是在Kubernetes Cluster內建立。
+- `argocd-server-private` Service、NodeBalancer與其Cloud Firewall由 `gitops-demo-infra` 管理。
 - 下游 GitOps 管理由 `gitops-demo-infra` 與 `gitops-demo-apps` 負責。
 - 應用程式原始碼、Dockerfile 與映像建置 workflow 由 `gitops-demo-frontend`、`gitops-demo-backend` 負責，不屬於本 repo。
 
 部署分為兩階段：
 
-- Phase 1：`terraform/environments/dev`、`terraform/environments/prod` 建立 LKE 叢集；啟用時亦建立 Marketplace OpenVPN Linode、Linode Firewall 與部署憑證，並寫入相關 SSM 參數。
+- Phase 1：`terraform/environments/dev`、`terraform/environments/prod`建立LKE Cluster、evidence-gated Cluster Firewall／Control Plane ACL並寫入cluster SSM metadata。
 - Phase 2：`terraform/environments/dev-k8s`、`terraform/environments/prod-k8s` 讀取 Phase 1 remote state，在叢集內建立 ArgoCD SA / RBAC / token，並寫入 SSM `token`。
-- OpenVPN 設定：Phase 1 完成且 Access Server ready 後，才可手動執行 `openvpn-configure.yml` 或本機 Ansible playbook；此步驟不屬於 Phase 2，也不建立 Kubernetes resources。
+
+跨Repository從零部署順序固定為：Cluster foundation → Platform Access → Cluster network boundary convergence → Infra / Argo CD → User Provisioning。
 
 ## 目錄與責任
 
 - `terraform/modules/lke-cluster/`：主要 LKE cluster module，建立 cluster 與 primary node pool。
-- `terraform/modules/openvpn-marketplace/`：OpenVPN Marketplace Linode 與 Linode Firewall module。
+- `terraform/modules/worker-firewall/`：既有相容路徑；提供evidence-gated Management／Worker Cluster Firewall與node attachment。
 - `terraform/modules/argocd-cluster-access/`：Phase 2 共用的 ArgoCD SA、RBAC 與 token module。
 - `terraform/environments/bootstrap/`：建立 S3 Terraform state backend。
 - `terraform/environments/dev/`、`prod/`：Phase 1 cluster provisioning。
-- `terraform/environments/dev/openvpn_*.tf`、`prod/openvpn_*.tf`：OpenVPN inputs、credentials、module wiring 與 outputs。
+- `config/worker-firewall/`：既有相容路徑；dev/prod schema v2 Cluster Firewall／Control Plane ACL canonical evidence與activation contract。
 - `terraform/environments/dev-k8s/`、`prod-k8s/`：Phase 2 Kubernetes provider、ArgoCD SA/RBAC/token 與 SSM token。
 - `.github/workflows/`：GitHub Actions orchestration；reusable workflow 以 `_` 開頭。
 - `.github/actions/`：專案內 composite actions。
-- `scripts/`：post-provision 與健康檢查 shell scripts。
-- `ansible/`：OpenVPN Access Server、dnsmasq、routing 與 UFW 的 idempotent 設定。
+- `scripts/`：post-provision、健康檢查與saved-plan safety guard scripts。
 - `docs/`：CI/CD 與操作文件。
 
 ## 工作原則
@@ -41,8 +43,9 @@
 - 保持變更範圍小而清楚；不要順手重構無關檔案。
 - Terraform 環境應保持 dev/prod 對稱。修改 dev 時，評估 prod 是否需要等價變更；若刻意不同，請在文件或註解中說明原因。
 - Phase 1 與 Phase 2 的依賴順序不可顛倒。`*-k8s` 環境必須依賴對應 Phase 1 remote state。
-- OpenVPN 是 dev/prod 的固定環境元件；不得重新加入環境層級的啟用開關。Linode、Firewall 與 generated credentials 必須隨 Phase 1 建立。
-- OpenVPN Terraform 與 Ansible 不得管理 `argocd-server`、`argocd-server-private` 或其他 Kubernetes object；這些資源屬於下游 GitOps repo。
+- Cluster Firewall預設inbound `DROP`、outbound `ACCEPT`。沒有verified runtime evidence時，對應Cluster與Control Plane ACL必須保持`activation_enabled=false`，不得猜測CIDR。
+- 每條Cluster Firewall allow rule必須記錄purpose與evidence，禁止`0.0.0.0/0`、`::/0`與Internet直接到Argo CD、NodePort或SSH。
+- Management Cluster Control Plane ACL只能允許已驗證的VPN public egress CIDR；啟用前必須確認Phase 2與post-provision runner確實經VPN送出API traffic。
 - 不要將 Argo CD 安裝、本體設定、Application/ApplicationSet 或 app manifests 加入本 repo。
 - 文件使用繁體中文為主；程式碼、變數、workflow id 與 script 名稱維持英文。
 
@@ -72,18 +75,14 @@
 - 不要讓 dev 與 prod 共用同一個 state key。
 - `linode_token` 是 sensitive；本機優先透過 `LINODE_TOKEN` 環境變數提供，CI 由 SSM `/gitops/shared/LINODE_TOKEN` 讀取。
 - SSM 路徑維持：
-  - `/gitops/shared/OPENVPN_CONTACT_EMAIL`
   - `/gitops/<env>/clusters/<cluster-label>/api-endpoint`
   - `/gitops/<env>/clusters/<cluster-label>/ca-cert`
   - `/gitops/<env>/clusters/<cluster-label>/token`
-  - `/gitops/<env>/openvpn/ansible/OPENVPN_ADMIN_PASSWORD`
-  - `/gitops/<env>/openvpn/ansible/OPENVPN_SSH_PRIVATE_KEY_B64`
-  - `/gitops/<env>/openvpn/ansible/OPENVPN_SSH_HOST_KEY`
-- OpenVPN root password、Admin password、SSH user key 與 SSH host key 必須由 Terraform `random` / `tls` resources 產生；不得提交或放入 GitHub Secrets。Root password 只供 Linode `root_pass` 使用並保留於 Terraform state；Admin password、SSH user private key 與 SSH host public key 會在 `write_ssm_parameters=true` 時寫入 OpenVPN SSM 參數。Phase 1 bootstrap workflow 必須在 Access Server ready 後讀取 Terraform 管理的 Admin password、以 `sacli` 套用到 `openvpn` 帳號，並以 `authcli` 驗證。
-- 除 contact email 外，OpenVPN infrastructure desired state 由 dev/prod `openvpn.tf` 的 defaults 管理，Internal DNS、split route 與 network desired state 則集中於 `openvpn_network.tf`；contact email 由 CI 從 SSM `/gitops/shared/OPENVPN_CONTACT_EMAIL` 注入，不依賴未提交的 `terraform.tfvars` 或 GitHub Environment Variables。
+- LKE、Cluster Firewall與Control Plane ACL的delete／replace／disable保護由Phase 1 saved-plan guard統一負責；一般plan／apply必須啟用guard，只有專用destroy workflow可略過。
 - 新增 Worker Cluster 時，需同步檢查：
   - Phase 1 `locals.tf` 的 `worker_clusters`
   - Phase 2 `locals.tf`、`providers.tf`、`argocd_sa.tf`、`ssm.tf`
+  - `config/worker-firewall/<env>.json` 的cluster key
   - README / docs 中的叢集清單與操作說明
 
 ## GitHub Actions 規範
@@ -92,15 +91,14 @@
 - prod apply 只由 `terraform-apply-prod.yml` 管理；prod 不因 branch push 自動 apply，必須透過 SemVer tag `v*` 或手動 workflow，並通過 GitHub Environment `prod` approval。
 - 本專案主 branch 是 `master`，workflow trigger、文件與指令範例都不要改成 `main`。
 - destroy 只由 `terraform-destroy.yml` 手動執行，且必須依序 Phase 2 再 Phase 1。
-- workflow/action/script 或 `.gitattributes` 變更應觸發 `terraform-apply-dev.yml`，並在 Quality Gate 成功後執行 dev apply；不得因 branch push 部署 prod。`ansible/**` 目前不在 dev apply 的 push path filter，僅透過 PR Quality Gate 與手動 OpenVPN workflow 驗證/套用。
+- workflow/action/script或`.gitattributes`變更應觸發`terraform-apply-dev.yml`，並在Quality Gate成功後執行dev apply；不得因branch push部署prod。
 - 需要 AWS 存取時一律使用 `.github/actions/configure-aws-credentials` composite action 與 OIDC；不要直接在 workflow 呼叫 `aws-actions/configure-aws-credentials`。
 - 所有需要 AWS 的 job 必須設定 `permissions: id-token: write` 與 `contents: read`。
 - `AWS_ACCOUNT_ID` 是唯一必要的 AWS 相關 GitHub Repository Secret。不要加入、宣告或傳遞 `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`。
 - Provider token 由 `.github/actions/get-ssm-parameters` 從 `/gitops/shared` 讀取後注入環境；workflow 不可引用 `secrets.LINODE_TOKEN`。
 - CI Terraform 步驟必須設定 `TF_VAR_write_kubeconfig_files=false`，避免 kubeconfig 寫入 runner 磁碟。
 - Terraform plan/apply/destroy log 必須過濾 `token`、`secret`、`password`、`pass[word]` 等敏感行。
-- 修改 workflow 後，使用 actionlint 驗證；修改 `scripts/*.sh` 後，使用 ShellCheck 驗證；修改 `ansible/**` 後，使用 yamllint 與 `ansible-playbook --syntax-check` 驗證。
-- `openvpn-configure.yml` 只能使用 `workflow_dispatch`，從 Phase 1 Terraform state 讀取非機密設定、從 Management Cluster 探索 `argocd-server-private` endpoint，並從 `/gitops/<env>/openvpn/ansible` 讀取 SSH material；prod 執行必須受 `prod` Environment approval 保護。
+- 修改workflow後使用actionlint；修改`scripts/*.sh`後使用ShellCheck。
 - Reusable workflows 的 `permissions`、`secrets: inherit`、OIDC 與 concurrency 設定不可隨意移除。
 - 呼叫 reusable workflow 時若被呼叫方需要 repository secret，必須加 `secrets: inherit`。
 - `.github/actions/**` 是 workflow 依賴的一部分；調整 workflow path filter 時，應確保 composite action 變更能觸發必要的 quality/plan 驗證。
@@ -125,22 +123,19 @@
   - `AWS_REGION`
   - AWS OIDC credentials
 
-## OpenVPN 與 Ansible 規範
+## Cluster Network Boundary規範
 
-- `openvpn-configure.yml` 執行前必須確認 OpenVPN 已啟用、Phase 1 apply 成功、`write_ssm_parameters=true`，且 Marketplace Access Server 已 ready。
-- Phase 1 bootstrap workflow 必須在 readiness 成功後讀取 Terraform 已發布的 `OPENVPN_ADMIN_PASSWORD`，同步至 Access Server 並驗證；不得在 workflow 產生或建立此參數，也不得把值輸出至 log 或 GitHub Secrets。
-- 各環境首次建立 OpenVPN 時，apply workflow 只能對當次 runner `/32` 暫開管理連線；Let’s Encrypt HTTP-01 所需 TCP/80 必須在 bootstrap 期間對 public IPv4 開放，Access Server healthy 後由 workflow 再次 apply 關閉 TCP/80 並移除 runner CIDR。
-- `openvpn-configure.yml` 只能在執行期間對當次 runner `/32` 暫開 TCP/22 與 TCP/943，所有成功或失敗路徑都必須嘗試恢復空的 `trusted_admin_cidrs`。
-- VM host UFW 固定允許 TCP/22 與 TCP/943，來源限制只由 inbound policy 為 `DROP` 的 Linode Firewall 管理，避免動態 runner 在 SSH 前無法先修改 UFW。
-- Ansible inventory 不得含 password 或 private key；CI 只能使用 ephemeral inventory、private key 與 `known_hosts`，並於結束時清理。
-- SSH host key 必須與 Terraform 產生並存入 SSM 的 Ed25519 public key 完全相符，不得以關閉 host key checking 規避。
-- 不要重設 Access Server core VPN subnet、CA、使用者或 client profiles；只管理文件列明的 DNS、split route、forwarding 與 UFW desired state。
-- `argocd_destination_cidr` 應從 `argocd-server-private` LoadBalancer IP 推導為 `/32`；`trusted_admin_cidrs` 不得使用 `0.0.0.0/0` 或 `::/0`，穩定狀態應為空集合。
+- `config/worker-firewall/<env>.json` schema v2是唯一canonical source；不得在tfvars、workflow env或文件另建一份rules或ACL addresses。
+- Cluster Firewall activation前必須有Management／Worker public IP／NodePort、Firewall owner、LKE control-plane、NodeBalancer health與node/pod traffic的runtime evidence。
+- Management Cluster Firewall另需確認VPN traffic經route或SNAT後的實際node source；Control Plane ACL則使用VPN public egress source，兩者不得互相推測。
+- node attachment只從LKE pool output推導，不手工維護instance IDs；新增或replacement node必須自動受同一Firewall保護。
+- NodeBalancer Firewall不能取代Cluster Firewall；DNS也不是authorization boundary。
+- runtime evidence未完成時使用`NOT_RUNTIME_VERIFIED`與停用adapter，不得因此猜測allowlist或啟用default-deny。
 
 ## 安全與破壞性操作
 
 - 不要主動執行 `terraform apply`、`terraform destroy`、`kubectl delete`、`gh workflow run terraform-destroy.yml` 等會改變或刪除雲端資源的命令，除非使用者明確要求。
-- 若使用者要求 destroy，必須再次確認環境與順序：先 Phase 2 `*-k8s`，再 Phase 1。Phase 1 destroy 會移除該環境的 OpenVPN Linode、Firewall、generated credentials 與 Terraform 管理的 SSM 參數，包含 `OPENVPN_ADMIN_PASSWORD`。
+- 若使用者要求destroy，必須再次確認環境與順序：先Phase 2 `*-k8s`，再Phase 1。Phase 1 destroy會移除LKE、node、cluster SSM metadata、已啟用的Cluster Firewall與Control Plane ACL。
 - destroy workflow 必須只允許 `workflow_dispatch`，由 environment choice 決定目標，並與 apply 共用 `tf-apply-<env>` concurrency group；prod 必須保留 GitHub Environment approval。
 - destroy 執行方式應先 `terraform state list` 判斷是否有 managed resources，再用 `terraform plan -destroy -detailed-exitcode -out=tfdestroy` 與 `terraform apply tfdestroy`；不要直接改成 `terraform destroy -auto-approve`。
 - destroy 不刪除 S3 backend bucket，保留 state backend 供日後重新 apply。
@@ -153,7 +148,7 @@
 - `cluster-post-provision.yml` 可由 apply workflow 呼叫，也可手動重新驗證；它不應重新 apply Terraform。
 - 完整驗證流程由 `_cluster-validate.yml` 封裝：每個 Cluster 只讀取一次專屬 SSM path，再執行 health check、SA/RBAC verify、readiness validation。
 - `cluster-health-check.yml` 是獨立健康檢查，不部署資源，也不驗證 SA/RBAC。
-- cluster post-provision / health workflows 不驗證或設定 OpenVPN；OpenVPN 由 `openvpn-configure.yml` 與 `docs/openvpn-internal-dns.md` 的 runtime checks 負責。
+- cluster post-provision／health workflows不驗證或設定Shared OpenVPN；該ownership屬`gitops-demo-platform-access`。
 - 排程健康檢查必須同時探索 dev 與 prod；手動與 workflow_call 則只檢查指定 environment。
 - 排程失敗必須建立或更新單一 incident issue，恢復後自動關閉；matrix job 不可各自建立重複 issue。
 - `cluster_label` 空值代表從對應 Phase 1 remote state 的非機密 `cluster_ids` output 探索所有受管 cluster；指定 label 時必須確認它存在於該 state，找不到 cluster 時應失敗，不可靜默成功。SSM 只提供逐叢集連線資料，不作為 cluster inventory。
@@ -171,9 +166,6 @@ terraform -chdir=terraform/environments/prod validate
 terraform -chdir=terraform/environments/prod-k8s validate
 shellcheck scripts/*.sh
 actionlint
-yamllint -d '{extends: default, rules: {line-length: {max: 140}}}' ansible
-cd ansible
-ansible-playbook -i inventories/example/hosts.yml --syntax-check playbooks/configure-openvpn-network.yml
 ```
 
 若使用 Docker 版 actionlint：
@@ -188,7 +180,7 @@ docker run --rm -v "$PWD:/repo" --workdir /repo rhysd/actionlint:1.7.12 -color
 
 - workflow trigger、path filter、approval、concurrency 或 secrets：更新 `docs/ci-cd.md` 與 README 的 CI/CD 摘要。
 - Terraform state key、SSM path、cluster label、team、node sizing：更新 README。
-- OpenVPN inputs、SSM path、Firewall、Ansible roles、部署順序或 credential lifecycle：更新 `docs/openvpn-internal-dns.md`，並同步檢查 README 與 `docs/ci-cd.md`。
+- Cluster Firewall／Control Plane ACL contract、evidence、attachment或guard：更新`docs/cluster-network-boundary.md`並同步檢查README與`docs/ci-cd.md`。
 - destroy 流程或安全限制：更新 README 與 `docs/ci-cd.md`。
 - manual command、failure handling、post-provision、health check 或 GitHub Environment 設定有變動時，更新 `docs/ci-cd.md`。
 - README 的操作範例需與 `docs/ci-cd.md` 保持一致，尤其是 `gh workflow run`、apply、health check、post-provision 與 destroy。

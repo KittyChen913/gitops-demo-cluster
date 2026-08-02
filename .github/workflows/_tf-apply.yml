@@ -125,9 +125,29 @@ jobs:
              (
                .close_interface
                | test("^KittyChen913/gitops-demo-platform-access/\\.github/actions/close-automation-vpn-tunnel@[0-9a-f]{40}$")
-             ) and
-             (.environments[$target_env].target_parameter_paths | length) == 2' \
+             )' \
             "${CONTRACT_PATH}" >/dev/null
+
+          # 獨立驗證 target_parameter_paths 數量：跟上面的 contract 檢查分開，
+          # 這樣數量對不上時才能印出實際數字，而不是丟一句看不出原因的 jq 失敗。
+          # 期望值來自 config/automation-vpn.json 自己的 expected_target_count
+          # 欄位（跟 target_parameter_paths 放在同一個 environment 區塊），不是
+          # 寫死在這個 workflow 裡——新增第三個 target 時只要改 JSON 那一個地方，
+          # 兩個欄位天生放在一起，不會漏改其中一邊。
+          expected_target_count="$(jq -r --arg target_env "${TARGET_ENV}" \
+            '.environments[$target_env].expected_target_count' \
+            "${CONTRACT_PATH}")"
+          if ! [[ "${expected_target_count}" =~ ^[0-9]+$ ]]; then
+            echo "::error title=Automation VPN Contract Mismatch::config/automation-vpn.json environments.${TARGET_ENV}.expected_target_count is missing or not a number." >&2
+            exit 1
+          fi
+          actual_target_count="$(jq -r --arg target_env "${TARGET_ENV}" \
+            '.environments[$target_env].target_parameter_paths | length' \
+            "${CONTRACT_PATH}")"
+          if [[ "${actual_target_count}" -ne "${expected_target_count}" ]]; then
+            echo "::error title=Automation VPN Contract Mismatch::config/automation-vpn.json environments.${TARGET_ENV}.target_parameter_paths has ${actual_target_count} entr$([ "${actual_target_count}" = "1" ] && echo y || echo ies), but expected_target_count is ${expected_target_count}. Update both fields together in config/automation-vpn.json." >&2
+            exit 1
+          fi
 
           route_targets=()
           health_targets=()

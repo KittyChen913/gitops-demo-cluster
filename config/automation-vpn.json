@@ -10,13 +10,15 @@
       "target_parameter_paths": [
         "/gitops/dev/clusters/lke-dev-mgmt/api-endpoint",
         "/gitops/dev/clusters/lke-dev-ateam/api-endpoint"
-      ]
+      ],
+      "expected_target_count": 2
     },
     "prod": {
       "target_parameter_paths": [
         "/gitops/prod/clusters/lke-prod-mgmt/api-endpoint",
         "/gitops/prod/clusters/lke-prod-ateam/api-endpoint"
-      ]
+      ],
+      "expected_target_count": 2
     }
   }
 }

@@ -76,6 +76,27 @@ jobs:
         with:
           ssm_param_path: "/gitops/shared"
 
+      - name: Resolve Platform Access VPN source
+        id: vpn-source
+        if: inputs.enforce_cluster_boundary
+        env:
+          CONTRACT_PATH: ${{ github.workspace }}/config/worker-firewall/${{ inputs.environment }}.json
+        run: |
+          parameter_path="$(jq -er '.vpn_server.ssm_parameter_path' "${CONTRACT_PATH}")"
+          vpn_ip="$(aws ssm get-parameter \
+            --name "${parameter_path}" \
+            --query Parameter.Value \
+            --output text)"
+          if [ -z "${vpn_ip}" ] || [ "${vpn_ip}" = "None" ]; then
+            echo "::error title=Missing VPN Source::Platform Access VPN public egress IP is unavailable"
+            exit 1
+          fi
+          echo "ip=${vpn_ip}" >> "$GITHUB_OUTPUT"
+          echo "terraform_input_required=$(jq -r '
+            (.control_plane_acl.activation_enabled // false) or
+            ([.clusters[].activation_enabled // false] | any)
+          ' "${CONTRACT_PATH}")" >> "$GITHUB_OUTPUT"
+
       - name: Terraform Init
         run: |
           terraform init \
@@ -96,6 +117,10 @@ jobs:
           TFVARS_ARGS=()
           if [ -f "terraform.tfvars" ]; then
             TFVARS_ARGS=(-var-file=terraform.tfvars)
+          fi
+
+          if [ "${VPN_TERRAFORM_INPUT_REQUIRED}" = "true" ]; then
+            export TF_VAR_vpn_server_public_egress_ip="${VPN_SOURCE_IP}"
           fi
 
           terraform plan \
@@ -119,18 +144,22 @@ jobs:
         env:
           TF_VAR_linode_token: ${{ env.LINODE_TOKEN }}
           TF_VAR_write_kubeconfig_files: "false"
+          VPN_SOURCE_IP: ${{ steps.vpn-source.outputs.ip }}
+          VPN_TERRAFORM_INPUT_REQUIRED: ${{ steps.vpn-source.outputs.terraform_input_required }}
 
       - name: Validate Cluster Boundary Plan
         if: inputs.enforce_cluster_boundary
         env:
           TARGET_ENV: ${{ inputs.environment }}
           CONTRACT_PATH: ${{ github.workspace }}/config/worker-firewall/${{ inputs.environment }}.json
+          VPN_SOURCE_IP: ${{ steps.vpn-source.outputs.ip }}
         run: |
           terraform show -json tfplan > tfplan.json
           bash "${GITHUB_WORKSPACE}/scripts/verify-cluster-boundary-plan.sh" \
             "${TARGET_ENV}" \
             "${CONTRACT_PATH}" \
-            tfplan.json
+            tfplan.json \
+            "${VPN_SOURCE_IP}/32"
 
       - name: Post Plan Summary
         if: always()

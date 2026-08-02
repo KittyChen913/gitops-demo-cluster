@@ -3,6 +3,9 @@
   "environment": "prod",
   "inbound_policy": "DROP",
   "outbound_policy": "ACCEPT",
+  "vpn_server": {
+    "ssm_parameter_path": "/gitops/platform-access/network/VPN_PUBLIC_EGRESS_IP"
+  },
   "control_plane_acl": {
     "activation_enabled": false,
     "evidence_status": "NOT_RUNTIME_VERIFIED",

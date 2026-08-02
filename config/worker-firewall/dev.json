@@ -3,14 +3,18 @@
   "environment": "dev",
   "inbound_policy": "DROP",
   "outbound_policy": "ACCEPT",
+  "vpn_server": {
+    "ssm_parameter_path": "/gitops/platform-access/network/VPN_PUBLIC_EGRESS_IP"
+  },
   "control_plane_acl": {
-    "activation_enabled": false,
-    "evidence_status": "NOT_RUNTIME_VERIFIED",
+    "activation_enabled": true,
+    "evidence_status": "VERIFIED",
     "required_runtime_evidence": [
       "platform_access_vpn_public_egress_cidr",
       "github_actions_vpn_route_and_egress",
       "management_api_access_recovery_path"
     ],
+    "ipv4_source": "platform_access_vpn_server",
     "ipv4_addresses": [],
     "ipv6_addresses": []
   },
@@ -18,31 +22,180 @@
     "management": {
       "role": "management",
       "firewall_label": "lke-dev-mgmt-nodes",
-      "evidence_status": "NOT_RUNTIME_VERIFIED",
-      "activation_enabled": false,
+      "evidence_status": "VERIFIED",
+      "activation_enabled": true,
       "required_runtime_evidence": [
-        "management_public_ipv4_and_nodeport_inventory",
-        "existing_firewall_or_controller_inventory",
-        "lke_control_plane_and_node_traffic_sources",
-        "nodebalancer_backend_and_health_check_sources",
-        "node_and_pod_overlay_traffic_sources",
-        "platform_access_vpn_node_source_cidr"
+        "akamai_lke_network_firewall_details",
+        "platform_access_vpn_public_egress_cidr",
+        "github_actions_vpn_route_and_egress"
       ],
-      "inbound_rules": []
+      "inbound_rules": [
+        {
+          "label": "vpn-server-tcp",
+          "protocol": "TCP",
+          "ipv4_source": "platform_access_vpn_server",
+          "purpose": "只允許經 Platform Access VPN Server 進入 node 的外部 TCP 流量。",
+          "evidence": "platform_access_vpn_public_egress_cidr"
+        },
+        {
+          "label": "vpn-server-udp",
+          "protocol": "UDP",
+          "ipv4_source": "platform_access_vpn_server",
+          "purpose": "只允許經 Platform Access VPN Server 進入 node 的外部 UDP 流量。",
+          "evidence": "platform_access_vpn_public_egress_cidr"
+        },
+        {
+          "label": "vpn-server-icmp",
+          "protocol": "ICMP",
+          "ipv4_source": "platform_access_vpn_server",
+          "purpose": "只允許經 Platform Access VPN Server 進入 node 的外部 ICMP 流量。",
+          "evidence": "platform_access_vpn_public_egress_cidr"
+        },
+        {
+          "label": "lke-kubelet-health",
+          "protocol": "TCP",
+          "ports": "10250,10256",
+          "ipv4": ["192.168.128.0/17"],
+          "purpose": "允許 LKE control plane 執行 kubelet health checks。",
+          "evidence": "akamai_lke_network_firewall_details"
+        },
+        {
+          "label": "lke-wireguard",
+          "protocol": "UDP",
+          "ports": "51820",
+          "ipv4": ["192.168.128.0/17"],
+          "purpose": "允許 LKE control plane 與 node 的 WireGuard tunnel。",
+          "evidence": "akamai_lke_network_firewall_details"
+        },
+        {
+          "label": "lke-calico-bgp",
+          "protocol": "TCP",
+          "ports": "179",
+          "ipv4": ["192.168.128.0/17"],
+          "purpose": "允許 Calico BGP traffic。",
+          "evidence": "akamai_lke_network_firewall_details"
+        },
+        {
+          "label": "lke-calico-typha",
+          "protocol": "TCP",
+          "ports": "5473",
+          "ipv4": ["192.168.128.0/17"],
+          "purpose": "允許 Calico Typha traffic。",
+          "evidence": "akamai_lke_network_firewall_details"
+        },
+        {
+          "label": "lke-nodebalancer-tcp",
+          "protocol": "TCP",
+          "ports": "30000-32767",
+          "ipv4": ["192.168.255.0/24"],
+          "purpose": "允許 NodeBalancer 對 backend NodePort 的 TCP traffic 與 health checks。",
+          "evidence": "akamai_lke_network_firewall_details"
+        },
+        {
+          "label": "lke-nodebalancer-udp",
+          "protocol": "UDP",
+          "ports": "30000-32767",
+          "ipv4": ["192.168.255.0/24"],
+          "purpose": "允許 NodeBalancer 對 backend NodePort 的 UDP traffic 與 health checks。",
+          "evidence": "akamai_lke_network_firewall_details"
+        },
+        {
+          "label": "lke-ipencap",
+          "protocol": "IPENCAP",
+          "ipv4": ["192.168.128.0/17"],
+          "purpose": "允許 LKE node pools 與 control plane 的 IPENCAP internal traffic。",
+          "evidence": "akamai_lke_network_firewall_details"
+        }
+      ]
     },
     "ateam": {
       "role": "worker",
       "firewall_label": "lke-dev-ateam-workers",
-      "evidence_status": "NOT_RUNTIME_VERIFIED",
-      "activation_enabled": false,
+      "evidence_status": "VERIFIED",
+      "activation_enabled": true,
       "required_runtime_evidence": [
-        "worker_public_ipv4_and_nodeport_inventory",
-        "existing_firewall_or_controller_inventory",
-        "lke_control_plane_and_node_traffic_sources",
-        "nodebalancer_backend_and_health_check_sources",
-        "node_and_pod_overlay_traffic_sources"
+        "akamai_lke_network_firewall_details",
+        "platform_access_vpn_public_egress_cidr",
+        "github_actions_vpn_route_and_egress"
       ],
-      "inbound_rules": []
+      "inbound_rules": [
+        {
+          "label": "vpn-server-tcp",
+          "protocol": "TCP",
+          "ipv4_source": "platform_access_vpn_server",
+          "purpose": "只允許經 Platform Access VPN Server 進入 node 的外部 TCP 流量。",
+          "evidence": "platform_access_vpn_public_egress_cidr"
+        },
+        {
+          "label": "vpn-server-udp",
+          "protocol": "UDP",
+          "ipv4_source": "platform_access_vpn_server",
+          "purpose": "只允許經 Platform Access VPN Server 進入 node 的外部 UDP 流量。",
+          "evidence": "platform_access_vpn_public_egress_cidr"
+        },
+        {
+          "label": "vpn-server-icmp",
+          "protocol": "ICMP",
+          "ipv4_source": "platform_access_vpn_server",
+          "purpose": "只允許經 Platform Access VPN Server 進入 node 的外部 ICMP 流量。",
+          "evidence": "platform_access_vpn_public_egress_cidr"
+        },
+        {
+          "label": "lke-kubelet-health",
+          "protocol": "TCP",
+          "ports": "10250,10256",
+          "ipv4": ["192.168.128.0/17"],
+          "purpose": "允許 LKE control plane 執行 kubelet health checks。",
+          "evidence": "akamai_lke_network_firewall_details"
+        },
+        {
+          "label": "lke-wireguard",
+          "protocol": "UDP",
+          "ports": "51820",
+          "ipv4": ["192.168.128.0/17"],
+          "purpose": "允許 LKE control plane 與 node 的 WireGuard tunnel。",
+          "evidence": "akamai_lke_network_firewall_details"
+        },
+        {
+          "label": "lke-calico-bgp",
+          "protocol": "TCP",
+          "ports": "179",
+          "ipv4": ["192.168.128.0/17"],
+          "purpose": "允許 Calico BGP traffic。",
+          "evidence": "akamai_lke_network_firewall_details"
+        },
+        {
+          "label": "lke-calico-typha",
+          "protocol": "TCP",
+          "ports": "5473",
+          "ipv4": ["192.168.128.0/17"],
+          "purpose": "允許 Calico Typha traffic。",
+          "evidence": "akamai_lke_network_firewall_details"
+        },
+        {
+          "label": "lke-nodebalancer-tcp",
+          "protocol": "TCP",
+          "ports": "30000-32767",
+          "ipv4": ["192.168.255.0/24"],
+          "purpose": "允許 NodeBalancer 對 backend NodePort 的 TCP traffic 與 health checks。",
+          "evidence": "akamai_lke_network_firewall_details"
+        },
+        {
+          "label": "lke-nodebalancer-udp",
+          "protocol": "UDP",
+          "ports": "30000-32767",
+          "ipv4": ["192.168.255.0/24"],
+          "purpose": "允許 NodeBalancer 對 backend NodePort 的 UDP traffic 與 health checks。",
+          "evidence": "akamai_lke_network_firewall_details"
+        },
+        {
+          "label": "lke-ipencap",
+          "protocol": "IPENCAP",
+          "ipv4": ["192.168.128.0/17"],
+          "purpose": "允許 LKE node pools 與 control plane 的 IPENCAP internal traffic。",
+          "evidence": "akamai_lke_network_firewall_details"
+        }
+      ]
     }
   }
 }

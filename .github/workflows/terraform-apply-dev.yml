@@ -27,7 +27,7 @@
 #   │  AWS S3 bucket（版本控制 + 加密 + 封鎖公開存取）              │
 #   ├─────────────────────────────────────────────────────────────────┤
 #   │  [階段 1] apply-infrastructure                                  │
-#   │  terraform/environments/dev → 建立 LKE 與 Cluster boundary     │
+#   │  terraform/environments/dev → 建立 LKE 與 Cluster 邊界         │
 #   │  寫入: SSM cluster metadata                                   │
 #   ├─────────────────────────────────────────────────────────────────┤
 #   │  [階段 2] apply-k8s          （needs: apply-infrastructure）     │
@@ -137,7 +137,7 @@ jobs:
     with:
       environment: ${{ needs.preflight.outputs.target_env }}
 
-  # ── Phase 1：建立 LKE Cluster 與 Cluster boundary ──────────────────────────
+  # ── Phase 1：建立 LKE Cluster 與 Cluster 邊界 ──────────────────────────────
   apply-infrastructure:
     name: "Phase 1 — Apply Infrastructure [${{ needs.preflight.outputs.target_env }}]"
     needs: [preflight, bootstrap-backend]

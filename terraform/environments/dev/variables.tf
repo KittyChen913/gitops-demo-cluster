@@ -58,3 +58,16 @@ variable "write_ssm_parameters" {
   type        = bool
   default     = true
 }
+
+variable "vpn_server_public_egress_ip" {
+  description = "Platform Access 發布的 VPN Server public egress IPv4；由 CI 從 SSM canonical contract 注入。"
+  type        = string
+
+  validation {
+    condition = (
+      !strcontains(var.vpn_server_public_egress_ip, "/") &&
+      can(cidrnetmask("${var.vpn_server_public_egress_ip}/32"))
+    )
+    error_message = "vpn_server_public_egress_ip must be a single IPv4 address without a CIDR suffix."
+  }
+}

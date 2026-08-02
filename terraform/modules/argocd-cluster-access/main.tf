@@ -4,7 +4,7 @@ resource "kubernetes_cluster_role_v1" "argocd" {
     name = "argocd-manager"
   }
 
-  # 完整讀取權限供 Argo CD 比較期望狀態與實際狀態。
+  # 完整讀取權限供 ArgoCD 比較期望狀態與實際狀態。
   rule {
     api_groups = ["*"]
     resources  = ["*"]

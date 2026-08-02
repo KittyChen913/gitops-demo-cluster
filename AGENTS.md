@@ -4,12 +4,12 @@
 
 ## 專案定位
 
-本 repo負責以Terraform管理Linode Kubernetes Engine (LKE) Cluster lifecycle、Node Pool、Cluster Firewall、Management Cluster Control Plane ACL、Argo CD cluster access與cluster connection SSM parameters。
+本 repo負責以Terraform管理Linode Kubernetes Engine (LKE) Cluster lifecycle、Node Pool、Cluster Firewall、Management Cluster Control Plane ACL、ArgoCD cluster access與cluster connection SSM parameters。
 
 專案邊界：
 
-- 本 repo管理LKE Cluster、dev/prod隔離、Management／Worker Cluster Firewall、Management Cluster Control Plane ACL，以及Argo CD用ServiceAccount / RBAC / token。
-- 不在本 repo 安裝 Argo CD 本體、建立 GitOps bootstrap manifest，或管理應用程式 workload。
+- 本 repo管理LKE Cluster、dev/prod隔離、Management／Worker Cluster Firewall、Management Cluster Control Plane ACL，以及ArgoCD用ServiceAccount / RBAC / token。
+- 不在本 repo 安裝 ArgoCD 本體、建立 GitOps bootstrap manifest，或管理應用程式 workload。
 - Shared OpenVPN、VPN Server Firewall、Internal DNS、routing、NAT、groups與credential bootstrap由 `gitops-demo-platform-access` 管理；不得重新加入本repo。
 - Shared OpenVPN建立於獨立Linode VM，不是在Kubernetes Cluster內建立。
 - `argocd-server-private` Service、NodeBalancer與其Cloud Firewall由 `gitops-demo-infra` 管理。
@@ -21,7 +21,7 @@
 - Phase 1：`terraform/environments/dev`、`terraform/environments/prod`建立LKE Cluster、evidence-gated Cluster Firewall／Control Plane ACL並寫入cluster SSM metadata。
 - Phase 2：`terraform/environments/dev-k8s`、`terraform/environments/prod-k8s` 讀取 Phase 1 remote state，在叢集內建立 ArgoCD SA / RBAC / token，並寫入 SSM `token`。
 
-跨Repository從零部署順序固定為：Cluster foundation → Platform Access → Cluster network boundary convergence → Infra / Argo CD → User Provisioning。
+跨Repository從零部署順序固定為：Cluster foundation → Platform Access → Cluster network boundary convergence → Infra / ArgoCD → User Provisioning。
 
 ## 目錄與責任
 
@@ -44,9 +44,9 @@
 - Terraform 環境應保持 dev/prod 對稱。修改 dev 時，評估 prod 是否需要等價變更；若刻意不同，請在文件或註解中說明原因。
 - Phase 1 與 Phase 2 的依賴順序不可顛倒。`*-k8s` 環境必須依賴對應 Phase 1 remote state。
 - Cluster Firewall預設inbound `DROP`、outbound `ACCEPT`。沒有verified runtime evidence時，對應Cluster與Control Plane ACL必須保持`activation_enabled=false`，不得猜測CIDR。
-- 每條Cluster Firewall allow rule必須記錄purpose與evidence，禁止`0.0.0.0/0`、`::/0`與Internet直接到Argo CD、NodePort或SSH。
+- 每條Cluster Firewall allow rule必須記錄purpose與evidence，禁止`0.0.0.0/0`、`::/0`與Internet直接到ArgoCD、NodePort或SSH。
 - Management Cluster Control Plane ACL只能允許已驗證的VPN public egress CIDR；啟用前必須確認Phase 2與post-provision runner確實經VPN送出API traffic。
-- 不要將 Argo CD 安裝、本體設定、Application/ApplicationSet 或 app manifests 加入本 repo。
+- 不要將 ArgoCD 安裝、本體設定、Application/ApplicationSet 或 app manifests 加入本 repo。
 - 文件使用繁體中文為主；程式碼、變數、workflow id 與 script 名稱維持英文。
 
 ## 註解與術語規範

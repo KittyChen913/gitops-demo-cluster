@@ -68,7 +68,9 @@ variable "control_plane_acl" {
   default = null
 
   validation {
-    condition = var.control_plane_acl == null || (
+    # && / || 在 HCL 不會 short-circuit，兩側運算元都會被求值；
+    # 若右側對 null 值取屬性會直接報錯，因此改用三元運算式讓未選中的分支不被求值。
+    condition = var.control_plane_acl == null ? true : (
       var.control_plane_acl.enabled &&
       length(setunion(
         var.control_plane_acl.ipv4_addresses,

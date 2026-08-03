@@ -137,16 +137,11 @@ jobs:
           set -euo pipefail
           jq -e \
             --arg target_env "${TARGET_ENV}" \
-            '.schema_version == 1 and
+            '.schema_version == 2 and
              .identity == "ci-cluster" and
-             (
-               .shared_interface
-               | test("^KittyChen913/gitops-demo-platform-access/\\.github/actions/open-automation-vpn-tunnel@[0-9a-f]{40}$")
-             ) and
-             (
-               .close_interface
-               | test("^KittyChen913/gitops-demo-platform-access/\\.github/actions/close-automation-vpn-tunnel@[0-9a-f]{40}$")
-             )' \
+             (.profile_ssm_path == "/gitops/platform-access/automation/ci-cluster/PROFILE") and
+             (.password_ssm_path == "/gitops/platform-access/automation/ci-cluster/PASSWORD") and
+             (.expected_tunnel_ip | test("^([0-9]{1,3}\\.){3}[0-9]{1,3}$"))' \
             "${CONTRACT_PATH}" >/dev/null
 
           # 獨立驗證 target_parameter_paths 數量：跟上面的 contract 檢查分開，
@@ -195,6 +190,7 @@ jobs:
             echo "identity=$(jq -r '.identity' "${CONTRACT_PATH}")"
             echo "profile_parameter=$(jq -r '.profile_ssm_path' "${CONTRACT_PATH}")"
             echo "password_parameter=$(jq -r '.password_ssm_path' "${CONTRACT_PATH}")"
+            echo "expected_tunnel_ip=$(jq -r '.expected_tunnel_ip' "${CONTRACT_PATH}")"
             echo "route_targets<<EOF"
             printf '%s\n' "${route_targets[@]}"
             echo "EOF"
@@ -206,11 +202,12 @@ jobs:
       - name: Open automation VPN tunnel
         id: automation-vpn
         if: ${{ !inputs.enforce_cluster_boundary }}
-        uses: KittyChen913/gitops-demo-platform-access/.github/actions/open-automation-vpn-tunnel@35bcef7b05a8d4b18526f3a6cb3761c04ea03d8c
+        uses: ./.github/actions/open-automation-vpn-tunnel
         with:
           identity: ${{ steps.automation-vpn-targets.outputs.identity }}
           profile-ssm-parameter: ${{ steps.automation-vpn-targets.outputs.profile_parameter }}
           password-ssm-parameter: ${{ steps.automation-vpn-targets.outputs.password_parameter }}
+          expected-tunnel-ip: ${{ steps.automation-vpn-targets.outputs.expected_tunnel_ip }}
           route-targets: ${{ steps.automation-vpn-targets.outputs.route_targets }}
           health-targets: ${{ steps.automation-vpn-targets.outputs.health_targets }}
 
@@ -292,7 +289,7 @@ jobs:
 
       - name: Close automation VPN tunnel
         if: ${{ always() && steps.automation-vpn.outputs['state-directory'] != '' }}
-        uses: KittyChen913/gitops-demo-platform-access/.github/actions/close-automation-vpn-tunnel@35bcef7b05a8d4b18526f3a6cb3761c04ea03d8c
+        uses: ./.github/actions/close-automation-vpn-tunnel
         with:
           state-directory: ${{ steps.automation-vpn.outputs['state-directory'] }}
 

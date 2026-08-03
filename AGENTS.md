@@ -134,8 +134,8 @@
 - node attachment只從LKE pool output推導，不手工維護instance IDs；新增或replacement node必須自動受同一Firewall保護。
 - NodeBalancer Firewall不能取代Cluster Firewall；DNS也不是authorization boundary。
 - runtime evidence未完成時使用`NOT_RUNTIME_VERIFIED`與停用adapter，不得因此猜測allowlist或啟用default-deny。
-- 需要連線Kubernetes API server建立ArgoCD SA/RBAC/token的apply（`dev-k8s`／`prod-k8s`，判斷式為`enforce_cluster_boundary=false`）改經`config/automation-vpn.json`定義的automation VPN tunnel連線Management／Worker Cluster API endpoint，避免被只允許VPN來源的Control Plane ACL擋下；tunnel open/close由`gitops-demo-platform-access`提供的composite action負責，本repo不得重新實作或內嵌VPN client邏輯。
-- `config/automation-vpn.json`的`target_parameter_paths`必須對應SSM上實際存在的`/gitops/<env>/clusters/<cluster-label>/api-endpoint`；新增Worker Cluster時需同步更新此清單。
+- 需要連線Kubernetes API server建立ArgoCD SA/RBAC/token的apply（`dev-k8s`／`prod-k8s`，判斷式為`enforce_cluster_boundary=false`）改經`config/automation-vpn.json`定義的automation VPN tunnel連線Management／Worker Cluster API endpoint，避免被只允許VPN來源的Control Plane ACL擋下；tunnel open/close composite action（`.github/actions/{open,close}-automation-vpn-tunnel`）與執行腳本（`scripts/manage-automation-vpn-tunnel.sh`）由本repo自行擁有與維護，只使用`./`本地相對路徑引用，不得改為跨repo`uses:`參照、不得以`gitops-demo-platform-access`的commit SHA作為workflow runtime dependency。Shared OpenVPN Server、automation identity簽發、SSM credential publishing與VPN public egress IP仍由`gitops-demo-platform-access`管理，屬platform service contract，只能透過SSM參數消費，不得取得其Git history、branch、tag或檔案布局的依賴。
+- `config/automation-vpn.json`的`target_parameter_paths`必須對應SSM上實際存在的`/gitops/<env>/clusters/<cluster-label>/api-endpoint`；新增Worker Cluster時需同步更新此清單。`expected_tunnel_ip`是本repo宣告的ci-cluster固定`conn_ip`，若`gitops-demo-platform-access`的`config/automation-identities.json`變更該身份的`conn_ip`，需人工同步更新此欄位；本欄位只是本repo自行宣告的期望值比對基準，不是跨repo程式碼相依。
 
 ## 安全與破壞性操作
 

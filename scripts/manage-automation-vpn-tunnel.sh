@@ -235,13 +235,23 @@ if [[ -n "${expected_tunnel_ip}" ]]; then
 fi
 
 # Health check 重用上面解析路由時得到的 host_resolved_ips，不再對同一個
-# 主機名稱重新呼叫一次 DNS；每輪依序探測全部已安裝 host route 的 IPv4，
-# 只要任一 gateway 可達就通過，避免多 A 記錄時永遠卡在第一個 IP。
+# 主機名稱重新呼叫一次 DNS。所有 target 共用 deadline，但每輪都會輪詢尚未
+# 成功的 target；同一 target 的任一 gateway 可達即通過，避免第一個 target
+# 獨占整段等待時間，讓後續 target 完全沒有被探測。
 health_check_timeout_seconds=300
 health_probe_timeout_seconds=10
 health_retry_interval_seconds=10
 health_check_started_at="${SECONDS}"
 health_check_deadline=$((SECONDS + health_check_timeout_seconds))
+
+declare -a health_target_keys=()
+declare -A health_target_hosts
+declare -A health_target_ports
+declare -A health_target_ip_lists
+declare -A health_target_ip_csvs
+declare -A health_target_rounds
+declare -A health_target_probe_counts
+declare -A health_target_reachable
 while IFS= read -r health_target; do
   health_target="${health_target#"${health_target%%[![:space:]]*}"}"
   health_target="${health_target%"${health_target##*[![:space:]]}"}"
@@ -265,33 +275,36 @@ while IFS= read -r health_target; do
   }
   mapfile -t health_ips <<< "${health_ip_list}"
   health_ip_csv="$(IFS=,; printf '%s' "${health_ips[*]}")"
+  health_key="${health_host}:${health_port}"
+  [[ -z "${health_target_hosts[${health_key}]:-}" ]] || {
+    echo "duplicate tunnel health target" >&2
+    exit 2
+  }
 
-  health_round=0
-  health_probe_count=0
-  health_reachable=""
-  while true; do
-    health_remaining_seconds=$((health_check_deadline - SECONDS))
-    if ((health_remaining_seconds <= 0)); then
-      health_elapsed_seconds=$((SECONDS - health_check_started_at))
-      {
-        echo "::error title=Automation VPN Health Check Failed::target=${health_host} tested-ipv4s=${health_ip_csv} port=${health_port} rounds=${health_round} probes=${health_probe_count} elapsed-seconds=${health_elapsed_seconds}"
-        for health_ip in "${health_ips[@]}"; do
-          echo "----- ip route get ${health_ip} -----"
-          ip route get "${health_ip}" 2>&1 || true
-        done
-        echo "----- tunnel interface -----"
-        cat "${state_directory_real}/tunnel-interface" 2>/dev/null || echo "(unavailable)"
-      } >&2
-      exit 1
-    fi
+  health_target_keys+=("${health_key}")
+  health_target_hosts["${health_key}"]="${health_host}"
+  health_target_ports["${health_key}"]="${health_port}"
+  health_target_ip_lists["${health_key}"]="${health_ip_list}"
+  health_target_ip_csvs["${health_key}"]="${health_ip_csv}"
+  health_target_rounds["${health_key}"]=0
+  health_target_probe_counts["${health_key}"]=0
+done <<< "${health_targets}"
 
-    health_round=$((health_round + 1))
+while true; do
+  for health_key in "${health_target_keys[@]}"; do
+    [[ -z "${health_target_reachable[${health_key}]:-}" ]] || continue
+
+    health_host="${health_target_hosts[${health_key}]}"
+    health_port="${health_target_ports[${health_key}]}"
+    mapfile -t health_ips <<< "${health_target_ip_lists[${health_key}]}"
+    health_target_rounds["${health_key}"]=$((health_target_rounds[${health_key}] + 1))
+
     for health_ip in "${health_ips[@]}"; do
       health_remaining_seconds=$((health_check_deadline - SECONDS))
       if ((health_remaining_seconds <= 0)); then
         break
       fi
-      health_probe_count=$((health_probe_count + 1))
+      health_target_probe_counts["${health_key}"]=$((health_target_probe_counts[${health_key}] + 1))
       health_attempt_timeout="${health_probe_timeout_seconds}"
       if ((health_remaining_seconds < health_probe_timeout_seconds)); then
         health_attempt_timeout="${health_remaining_seconds}"
@@ -299,26 +312,53 @@ while IFS= read -r health_target; do
       if timeout "${health_attempt_timeout}" \
         bash -c "exec 3<>\"/dev/tcp/\$1/\$2\"" _ \
         "${health_ip}" "${health_port}"; then
-        health_reachable=1
+        health_target_reachable["${health_key}"]=1
         break
       fi
     done
-    if [[ -n "${health_reachable}" ]]; then
+  done
+
+  all_health_targets_reachable=1
+  for health_key in "${health_target_keys[@]}"; do
+    if [[ -z "${health_target_reachable[${health_key}]:-}" ]]; then
+      all_health_targets_reachable=""
       break
     fi
-
-    health_remaining_seconds=$((health_check_deadline - SECONDS))
-    if ((health_remaining_seconds <= 0)); then
-      continue
-    fi
-    health_retry_sleep="${health_retry_interval_seconds}"
-    if ((health_remaining_seconds < health_retry_interval_seconds)); then
-      health_retry_sleep="${health_remaining_seconds}"
-    fi
-    echo "Automation VPN health check 尚未就緒：target=${health_host} tested-ipv4s=${health_ip_csv} port=${health_port} round=${health_round} probes=${health_probe_count}，將於 ${health_retry_sleep} 秒後重試（剩餘 ${health_remaining_seconds} 秒）。" >&2
-    sleep "${health_retry_sleep}"
   done
-done <<< "${health_targets}"
+  [[ -z "${all_health_targets_reachable}" ]] || break
+
+  health_remaining_seconds=$((health_check_deadline - SECONDS))
+  if ((health_remaining_seconds <= 0)); then
+    health_elapsed_seconds=$((SECONDS - health_check_started_at))
+    {
+      for health_key in "${health_target_keys[@]}"; do
+        [[ -z "${health_target_reachable[${health_key}]:-}" ]] || continue
+        health_host="${health_target_hosts[${health_key}]}"
+        health_port="${health_target_ports[${health_key}]}"
+        health_ip_csv="${health_target_ip_csvs[${health_key}]}"
+        echo "::error title=Automation VPN Health Check Failed::target=${health_host} tested-ipv4s=${health_ip_csv} port=${health_port} rounds=${health_target_rounds[${health_key}]} probes=${health_target_probe_counts[${health_key}]} elapsed-seconds=${health_elapsed_seconds}"
+        mapfile -t health_ips <<< "${health_target_ip_lists[${health_key}]}"
+        for health_ip in "${health_ips[@]}"; do
+          echo "----- ip route get ${health_ip} -----"
+          ip route get "${health_ip}" 2>&1 || true
+        done
+      done
+      echo "----- tunnel interface -----"
+      cat "${state_directory_real}/tunnel-interface" 2>/dev/null || echo "(unavailable)"
+    } >&2
+    exit 1
+  fi
+
+  health_retry_sleep="${health_retry_interval_seconds}"
+  if ((health_remaining_seconds < health_retry_interval_seconds)); then
+    health_retry_sleep="${health_remaining_seconds}"
+  fi
+  for health_key in "${health_target_keys[@]}"; do
+    [[ -z "${health_target_reachable[${health_key}]:-}" ]] || continue
+    echo "Automation VPN health check 尚未就緒：target=${health_target_hosts[${health_key}]} tested-ipv4s=${health_target_ip_csvs[${health_key}]} port=${health_target_ports[${health_key}]} round=${health_target_rounds[${health_key}]} probes=${health_target_probe_counts[${health_key}]}，將於 ${health_retry_sleep} 秒後重試（剩餘 ${health_remaining_seconds} 秒）。" >&2
+  done
+  sleep "${health_retry_sleep}"
+done
 
 trap - EXIT
 echo "Automation VPN tunnel opened with isolated host routes."

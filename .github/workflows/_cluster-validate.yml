@@ -78,6 +78,7 @@ jobs:
 
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         cluster_label: ${{ fromJSON(needs.discover-clusters.outputs.matrix) }}
 
@@ -105,6 +106,85 @@ jobs:
         with:
           version: "v1.35.0"
 
+      # Control Plane ACL（terraform/environments/${env}/clusters.tf）只允許
+      # automation VPN 的固定出口 IP 連進 API server。這個 job 若不先開 tunnel，
+      # runner 的公網 IP 會被 ACL 擋掉，導致下面所有檢查都連不上 API server。
+      - name: Resolve automation VPN targets
+        id: automation-vpn-targets
+        env:
+          CONTRACT_PATH: ${{ github.workspace }}/config/automation-vpn.json
+          TARGET_ENV: ${{ inputs.environment }}
+        run: |
+          set -euo pipefail
+          jq -e \
+            --arg target_env "${TARGET_ENV}" \
+            '.schema_version == 2 and
+             .identity == "ci-cluster" and
+             (.profile_ssm_path == "/gitops/platform-access/automation/ci-cluster/PROFILE") and
+             (.password_ssm_path == "/gitops/platform-access/automation/ci-cluster/PASSWORD") and
+             (.expected_tunnel_ip | test("^([0-9]{1,3}\\.){3}[0-9]{1,3}$"))' \
+            "${CONTRACT_PATH}" >/dev/null
+
+          expected_target_count="$(jq -r --arg target_env "${TARGET_ENV}" \
+            '.environments[$target_env].expected_target_count' \
+            "${CONTRACT_PATH}")"
+          if ! [[ "${expected_target_count}" =~ ^[0-9]+$ ]]; then
+            echo "::error title=Automation VPN Contract Mismatch::config/automation-vpn.json environments.${TARGET_ENV}.expected_target_count is missing or not a number." >&2
+            exit 1
+          fi
+          actual_target_count="$(jq -r --arg target_env "${TARGET_ENV}" \
+            '.environments[$target_env].target_parameter_paths | length' \
+            "${CONTRACT_PATH}")"
+          if [[ "${actual_target_count}" -ne "${expected_target_count}" ]]; then
+            echo "::error title=Automation VPN Contract Mismatch::config/automation-vpn.json environments.${TARGET_ENV}.target_parameter_paths has ${actual_target_count} entr$([ "${actual_target_count}" = "1" ] && echo y || echo ies), but expected_target_count is ${expected_target_count}. Update both fields together in config/automation-vpn.json." >&2
+            exit 1
+          fi
+
+          route_targets=()
+          health_targets=()
+          while IFS= read -r parameter_path; do
+            endpoint="$(aws ssm get-parameter \
+              --name "${parameter_path}" \
+              --query Parameter.Value \
+              --output text)"
+            if [ -z "${endpoint}" ] || [ "${endpoint}" = "None" ]; then
+              echo "::error title=Missing VPN Target::${parameter_path} is unavailable"
+              exit 1
+            fi
+            endpoint_host="${endpoint#*://}"
+            endpoint_host="${endpoint_host%%/*}"
+            endpoint_host="${endpoint_host%%:*}"
+            route_targets+=("${endpoint}")
+            health_targets+=("${endpoint_host}:443")
+          done < <(jq -r \
+            --arg target_env "${TARGET_ENV}" \
+            '.environments[$target_env].target_parameter_paths[]' \
+            "${CONTRACT_PATH}")
+
+          {
+            echo "identity=$(jq -r '.identity' "${CONTRACT_PATH}")"
+            echo "profile_parameter=$(jq -r '.profile_ssm_path' "${CONTRACT_PATH}")"
+            echo "password_parameter=$(jq -r '.password_ssm_path' "${CONTRACT_PATH}")"
+            echo "expected_tunnel_ip=$(jq -r '.expected_tunnel_ip' "${CONTRACT_PATH}")"
+            echo "route_targets<<EOF"
+            printf '%s\n' "${route_targets[@]}"
+            echo "EOF"
+            echo "health_targets<<EOF"
+            printf '%s\n' "${health_targets[@]}"
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Open automation VPN tunnel
+        id: automation-vpn
+        uses: ./.github/actions/open-automation-vpn-tunnel
+        with:
+          identity: ${{ steps.automation-vpn-targets.outputs.identity }}
+          profile-ssm-parameter: ${{ steps.automation-vpn-targets.outputs.profile_parameter }}
+          password-ssm-parameter: ${{ steps.automation-vpn-targets.outputs.password_parameter }}
+          expected-tunnel-ip: ${{ steps.automation-vpn-targets.outputs.expected_tunnel_ip }}
+          route-targets: ${{ steps.automation-vpn-targets.outputs.route_targets }}
+          health-targets: ${{ steps.automation-vpn-targets.outputs.health_targets }}
+
       - name: Run Health Check
         id: health
         continue-on-error: true
@@ -128,6 +208,12 @@ jobs:
           CLUSTER_ENV: ${{ inputs.environment }}
           CLUSTER_LABEL: ${{ matrix.cluster_label }}
         run: bash scripts/validate-cluster-readiness.sh
+
+      - name: Close automation VPN tunnel
+        if: ${{ always() && steps.automation-vpn.outputs['state-directory'] != '' }}
+        uses: ./.github/actions/close-automation-vpn-tunnel
+        with:
+          state-directory: ${{ steps.automation-vpn.outputs['state-directory'] }}
 
       - name: Evaluate Cluster Validation
         if: always()

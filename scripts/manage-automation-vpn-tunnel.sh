@@ -238,6 +238,11 @@ fi
 # 主機名稱重新呼叫一次 DNS；這樣才能保證 route 與 TCP health probe 測的是
 # 同一組已解析 IPv4，不會出現「route 裝在 A 記錄的第一個 IP，但 health
 # probe 因為重新解析而連到第二個 IP」的情況。
+health_check_timeout_seconds=300
+health_probe_timeout_seconds=10
+health_retry_interval_seconds=10
+health_check_started_at="${SECONDS}"
+health_check_deadline=$((SECONDS + health_check_timeout_seconds))
 while IFS= read -r health_target; do
   health_target="${health_target#"${health_target%%[![:space:]]*}"}"
   health_target="${health_target%"${health_target##*[![:space:]]}"}"
@@ -260,17 +265,44 @@ while IFS= read -r health_target; do
     exit 2
   }
 
-  if ! timeout 10 bash -c "exec 3<>\"/dev/tcp/\$1/\$2\"" _ "${health_ip}" "${health_port}"; then
-    route_get_output="$(ip route get "${health_ip}" 2>&1 || true)"
-    {
-      echo "::error title=Automation VPN Health Check Failed::target=${health_host} tested-ipv4=${health_ip} port=${health_port}"
-      echo "----- ip route get ${health_ip} -----"
-      printf '%s\n' "${route_get_output}"
-      echo "----- tunnel interface -----"
-      cat "${state_directory_real}/tunnel-interface" 2>/dev/null || echo "(unavailable)"
-    } >&2
-    exit 1
-  fi
+  health_attempt=0
+  while true; do
+    health_remaining_seconds=$((health_check_deadline - SECONDS))
+    if ((health_remaining_seconds <= 0)); then
+      route_get_output="$(ip route get "${health_ip}" 2>&1 || true)"
+      health_elapsed_seconds=$((SECONDS - health_check_started_at))
+      {
+        echo "::error title=Automation VPN Health Check Failed::target=${health_host} tested-ipv4=${health_ip} port=${health_port} attempts=${health_attempt} elapsed-seconds=${health_elapsed_seconds}"
+        echo "----- ip route get ${health_ip} -----"
+        printf '%s\n' "${route_get_output}"
+        echo "----- tunnel interface -----"
+        cat "${state_directory_real}/tunnel-interface" 2>/dev/null || echo "(unavailable)"
+      } >&2
+      exit 1
+    fi
+
+    health_attempt=$((health_attempt + 1))
+    health_attempt_timeout="${health_probe_timeout_seconds}"
+    if ((health_remaining_seconds < health_probe_timeout_seconds)); then
+      health_attempt_timeout="${health_remaining_seconds}"
+    fi
+    if timeout "${health_attempt_timeout}" \
+      bash -c "exec 3<>\"/dev/tcp/\$1/\$2\"" _ \
+      "${health_ip}" "${health_port}"; then
+      break
+    fi
+
+    health_remaining_seconds=$((health_check_deadline - SECONDS))
+    if ((health_remaining_seconds <= 0)); then
+      continue
+    fi
+    health_retry_sleep="${health_retry_interval_seconds}"
+    if ((health_remaining_seconds < health_retry_interval_seconds)); then
+      health_retry_sleep="${health_remaining_seconds}"
+    fi
+    echo "Automation VPN health check 尚未就緒：target=${health_host} tested-ipv4=${health_ip} port=${health_port} attempt=${health_attempt}，將於 ${health_retry_sleep} 秒後重試（剩餘 ${health_remaining_seconds} 秒）。" >&2
+    sleep "${health_retry_sleep}"
+  done
 done <<< "${health_targets}"
 
 trap - EXIT

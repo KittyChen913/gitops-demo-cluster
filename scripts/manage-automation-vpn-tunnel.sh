@@ -134,11 +134,11 @@ printf '%s\n' "${default_interface}" > "${default_interface_file}"
 
 # DNS 只在這個迴圈解析一次：每個 route target 的主機名稱只查一次
 # getent，解析結果同時寫進 routes_file（用來下 host route）與
-# host_resolved_ip（用來讓下面的 health check 重用同一組 IPv4，不再對
+# host_resolved_ips（用來讓下面的 health check 重用同一組 IPv4，不再對
 # 同一個主機名稱重新查一次 DNS，避免 health probe 探測到未安裝 host
 # route 的另一個 IP）。
 : > "${routes_file}"
-declare -A host_resolved_ip
+declare -A host_resolved_ips
 while IFS= read -r raw_target; do
   target="${raw_target#"${raw_target%%[![:space:]]*}"}"
   target="${target%"${target##*[![:space:]]}"}"
@@ -153,7 +153,7 @@ while IFS= read -r raw_target; do
 
   if [[ "${target}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
     printf '%s\n' "${target}" >> "${routes_file}"
-    host_resolved_ip["${target}"]="${target}"
+    host_resolved_ips["${target}"]="${target}"
   else
     mapfile -t resolved_ips < <(
       getent ahostsv4 "${target}" | awk '{print $1}' | sort -u
@@ -163,7 +163,7 @@ while IFS= read -r raw_target; do
       exit 1
     }
     printf '%s\n' "${resolved_ips[@]}" >> "${routes_file}"
-    host_resolved_ip["${target}"]="${resolved_ips[0]}"
+    host_resolved_ips["${target}"]="$(printf '%s\n' "${resolved_ips[@]}")"
   fi
 done <<< "${route_targets}"
 sort -u -o "${routes_file}" "${routes_file}"
@@ -234,10 +234,9 @@ if [[ -n "${expected_tunnel_ip}" ]]; then
   }
 fi
 
-# Health check 重用上面解析路由時得到的 host_resolved_ip，不再對同一個
-# 主機名稱重新呼叫一次 DNS；這樣才能保證 route 與 TCP health probe 測的是
-# 同一組已解析 IPv4，不會出現「route 裝在 A 記錄的第一個 IP，但 health
-# probe 因為重新解析而連到第二個 IP」的情況。
+# Health check 重用上面解析路由時得到的 host_resolved_ips，不再對同一個
+# 主機名稱重新呼叫一次 DNS；每輪依序探測全部已安裝 host route 的 IPv4，
+# 只要任一 gateway 可達就通過，避免多 A 記錄時永遠卡在第一個 IP。
 health_check_timeout_seconds=300
 health_probe_timeout_seconds=10
 health_retry_interval_seconds=10
@@ -259,36 +258,52 @@ while IFS= read -r health_target; do
     exit 2
   fi
 
-  health_ip="${host_resolved_ip[${health_host}]:-}"
-  [[ -n "${health_ip}" ]] || {
+  health_ip_list="${host_resolved_ips[${health_host}]:-}"
+  [[ -n "${health_ip_list}" ]] || {
     echo "::error title=Automation VPN Health Target Unresolved::${health_host} has no corresponding resolved route; health-targets host must match a route-targets host so both use the same resolved IPv4" >&2
     exit 2
   }
+  mapfile -t health_ips <<< "${health_ip_list}"
+  health_ip_csv="$(IFS=,; printf '%s' "${health_ips[*]}")"
 
-  health_attempt=0
+  health_round=0
+  health_probe_count=0
+  health_reachable=""
   while true; do
     health_remaining_seconds=$((health_check_deadline - SECONDS))
     if ((health_remaining_seconds <= 0)); then
-      route_get_output="$(ip route get "${health_ip}" 2>&1 || true)"
       health_elapsed_seconds=$((SECONDS - health_check_started_at))
       {
-        echo "::error title=Automation VPN Health Check Failed::target=${health_host} tested-ipv4=${health_ip} port=${health_port} attempts=${health_attempt} elapsed-seconds=${health_elapsed_seconds}"
-        echo "----- ip route get ${health_ip} -----"
-        printf '%s\n' "${route_get_output}"
+        echo "::error title=Automation VPN Health Check Failed::target=${health_host} tested-ipv4s=${health_ip_csv} port=${health_port} rounds=${health_round} probes=${health_probe_count} elapsed-seconds=${health_elapsed_seconds}"
+        for health_ip in "${health_ips[@]}"; do
+          echo "----- ip route get ${health_ip} -----"
+          ip route get "${health_ip}" 2>&1 || true
+        done
         echo "----- tunnel interface -----"
         cat "${state_directory_real}/tunnel-interface" 2>/dev/null || echo "(unavailable)"
       } >&2
       exit 1
     fi
 
-    health_attempt=$((health_attempt + 1))
-    health_attempt_timeout="${health_probe_timeout_seconds}"
-    if ((health_remaining_seconds < health_probe_timeout_seconds)); then
-      health_attempt_timeout="${health_remaining_seconds}"
-    fi
-    if timeout "${health_attempt_timeout}" \
-      bash -c "exec 3<>\"/dev/tcp/\$1/\$2\"" _ \
-      "${health_ip}" "${health_port}"; then
+    health_round=$((health_round + 1))
+    for health_ip in "${health_ips[@]}"; do
+      health_remaining_seconds=$((health_check_deadline - SECONDS))
+      if ((health_remaining_seconds <= 0)); then
+        break
+      fi
+      health_probe_count=$((health_probe_count + 1))
+      health_attempt_timeout="${health_probe_timeout_seconds}"
+      if ((health_remaining_seconds < health_probe_timeout_seconds)); then
+        health_attempt_timeout="${health_remaining_seconds}"
+      fi
+      if timeout "${health_attempt_timeout}" \
+        bash -c "exec 3<>\"/dev/tcp/\$1/\$2\"" _ \
+        "${health_ip}" "${health_port}"; then
+        health_reachable=1
+        break
+      fi
+    done
+    if [[ -n "${health_reachable}" ]]; then
       break
     fi
 
@@ -300,7 +315,7 @@ while IFS= read -r health_target; do
     if ((health_remaining_seconds < health_retry_interval_seconds)); then
       health_retry_sleep="${health_remaining_seconds}"
     fi
-    echo "Automation VPN health check 尚未就緒：target=${health_host} tested-ipv4=${health_ip} port=${health_port} attempt=${health_attempt}，將於 ${health_retry_sleep} 秒後重試（剩餘 ${health_remaining_seconds} 秒）。" >&2
+    echo "Automation VPN health check 尚未就緒：target=${health_host} tested-ipv4s=${health_ip_csv} port=${health_port} round=${health_round} probes=${health_probe_count}，將於 ${health_retry_sleep} 秒後重試（剩餘 ${health_remaining_seconds} 秒）。" >&2
     sleep "${health_retry_sleep}"
   done
 done <<< "${health_targets}"

@@ -14,7 +14,7 @@ variable "region" {
 variable "k8s_version" {
   description = "Kubernetes version for all dev clusters."
   type        = string
-  default     = "1.35"
+  default     = "1.36"
 }
 
 variable "mgmt_node_type" {

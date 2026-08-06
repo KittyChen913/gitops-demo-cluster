@@ -105,7 +105,7 @@ jobs:
       - name: Install kubectl
         uses: azure/setup-kubectl@v5
         with:
-          version: "v1.35.0"
+          version: "v1.36.0"
 
       # Control Plane ACL（terraform/environments/${env}/clusters.tf）只允許
       # automation VPN 的固定出口 IP 連進 API server。這個 job 若不先開 tunnel，

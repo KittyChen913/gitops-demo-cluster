@@ -17,9 +17,13 @@
 #   API_ENDPOINT     — Cluster API 端點
 #   CA_CERT          — Base64 編碼的 cluster CA
 #   TOKEN            — ArgoCD ServiceAccount 權杖
+#   EXPECTED_NODE_COUNT — Terraform desired state 中的 Node 數量
 #
 # 選填：
-#   HEALTH_TIMEOUT   — kubectl 請求逾時秒數（預設：15）
+#   HEALTH_TIMEOUT                  — 單次 kubectl 請求逾時秒數（預設：15）
+#   CLUSTER_STABILITY_WINDOW        — 必須連續健康的秒數（預設：300）
+#   CLUSTER_STABILITY_TIMEOUT       — 等待穩定的總秒數（預設：900）
+#   CLUSTER_STABILITY_POLL_INTERVAL — 取樣間隔秒數（預設：30）
 #
 # 結束代碼：
 #   0 — Cluster 健康
@@ -33,10 +37,38 @@ set -euo pipefail
 : "${API_ENDPOINT:?Required env var: API_ENDPOINT}"
 : "${CA_CERT:?Required env var: CA_CERT}"
 : "${TOKEN:?Required env var: TOKEN}"
+: "${EXPECTED_NODE_COUNT:?Required env var: EXPECTED_NODE_COUNT}"
 
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-15}"
+CLUSTER_STABILITY_WINDOW="${CLUSTER_STABILITY_WINDOW:-300}"
+CLUSTER_STABILITY_TIMEOUT="${CLUSTER_STABILITY_TIMEOUT:-900}"
+CLUSTER_STABILITY_POLL_INTERVAL="${CLUSTER_STABILITY_POLL_INTERVAL:-30}"
 CA_CERT_B64="${CA_CERT}"
 SA_TOKEN="${TOKEN}"
+
+for numeric_value in \
+  "${HEALTH_TIMEOUT}" \
+  "${CLUSTER_STABILITY_WINDOW}" \
+  "${CLUSTER_STABILITY_TIMEOUT}" \
+  "${CLUSTER_STABILITY_POLL_INTERVAL}"; do
+  if ! [[ "${numeric_value}" =~ ^[0-9]+$ ]]; then
+    echo "Health check timing values must be non-negative integers" >&2
+    exit 1
+  fi
+done
+
+if [ "${HEALTH_TIMEOUT}" -eq 0 ] || \
+  [ "${CLUSTER_STABILITY_TIMEOUT}" -eq 0 ] || \
+  [ "${CLUSTER_STABILITY_POLL_INTERVAL}" -eq 0 ] || \
+  [ "${CLUSTER_STABILITY_WINDOW}" -gt "${CLUSTER_STABILITY_TIMEOUT}" ]; then
+  echo "Health check timing values are inconsistent" >&2
+  exit 1
+fi
+
+if ! [[ "${EXPECTED_NODE_COUNT}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "EXPECTED_NODE_COUNT must be a positive integer" >&2
+  exit 1
+fi
 
 echo "============================================================"
 echo " check-cluster-health.sh"
@@ -76,62 +108,103 @@ KUBECONFIG_EOF
 chmod 600 "${KUBECONFIG_FILE}"
 export KUBECONFIG="${KUBECONFIG_FILE}"
 
-# ── 步驟 3：檢查 API server 連線能力 ────────────────────────────────────────────
-echo "[3/5] Checking API server connectivity (timeout=${HEALTH_TIMEOUT}s)..."
+# ── 步驟 3–5：等待 API、Node 與系統 Pod 連續穩定 ───────────────────────────────
+echo "[3/5] Waiting for API server connectivity..."
+echo "[4/5] Requiring a stable Ready node set..."
+echo "[5/5] Requiring stable kube-system pods..."
+echo "      Stability window=${CLUSTER_STABILITY_WINDOW}s, timeout=${CLUSTER_STABILITY_TIMEOUT}s"
 
-if ! kubectl cluster-info --request-timeout="${HEALTH_TIMEOUT}s" > /dev/null 2>&1; then
-  echo "::error title=API Server Unreachable::Cannot reach API server for ${CLUSTER_LABEL}"
-  exit 1
-fi
-echo "      API server: OK"
+START_TIME=$(date +%s)
+DEADLINE=$((START_TIME + CLUSTER_STABILITY_TIMEOUT))
+STABLE_SINCE=0
+STABLE_NODE_SET=""
+ATTEMPT=0
+TOTAL_NODES=0
+NOT_READY=0
+FAILED_PODS=0
+LAST_FAILURE="Cluster has not produced a health sample"
 
-# ── 步驟 4：檢查節點狀態 ────────────────────────────────────────────────────────────────
-echo "[4/5] Checking node status..."
+while true; do
+  ATTEMPT=$((ATTEMPT + 1))
+  NOW=$(date +%s)
+  SAMPLE_HEALTHY=true
+  NODE_STATUS=""
+  SYSTEM_PODS=""
 
-NODE_STATUS=$(kubectl get nodes --no-headers --request-timeout="${HEALTH_TIMEOUT}s" 2>/dev/null || echo "")
-if [ -z "${NODE_STATUS}" ]; then
-  echo "::error title=No Nodes::No nodes found in cluster ${CLUSTER_LABEL}"
-  exit 1
-fi
+  if ! kubectl cluster-info --request-timeout="${HEALTH_TIMEOUT}s" >/dev/null 2>&1; then
+    SAMPLE_HEALTHY=false
+    LAST_FAILURE="API server is unreachable"
+  elif ! NODE_STATUS=$(kubectl get nodes \
+    --request-timeout="${HEALTH_TIMEOUT}s" \
+    -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{range .status.conditions[?(@.type=="Ready")]}{.status}{end}{"\n"}{end}' \
+    2>/dev/null); then
+    SAMPLE_HEALTHY=false
+    LAST_FAILURE="Node query failed"
+  elif [ -z "${NODE_STATUS}" ]; then
+    SAMPLE_HEALTHY=false
+    LAST_FAILURE="No nodes were returned"
+  else
+    TOTAL_NODES=$(awk 'NF > 0 { count++ } END { print count + 0 }' <<< "${NODE_STATUS}")
+    NOT_READY=$(awk -F '\t' '$2 != "True" { count++ } END { print count + 0 }' <<< "${NODE_STATUS}")
+    CURRENT_NODE_SET=$(awk -F '\t' 'NF > 0 { print $1 }' <<< "${NODE_STATUS}" | sort | tr '\n' ',')
 
-TOTAL_NODES=$(echo "${NODE_STATUS}" | wc -l | tr -d ' ')
-NOT_READY=$(grep -vc -E "[[:space:]]Ready[[:space:]]" <<< "${NODE_STATUS}" || true)
+    if [ "${TOTAL_NODES}" -ne "${EXPECTED_NODE_COUNT}" ]; then
+      SAMPLE_HEALTHY=false
+      LAST_FAILURE="Expected ${EXPECTED_NODE_COUNT} nodes but found ${TOTAL_NODES}"
+    elif [ "${NOT_READY}" -gt 0 ]; then
+      SAMPLE_HEALTHY=false
+      LAST_FAILURE="${NOT_READY}/${TOTAL_NODES} nodes are not Ready"
+    elif ! SYSTEM_PODS=$(kubectl get pods -n kube-system --no-headers \
+      --request-timeout="${HEALTH_TIMEOUT}s" 2>/dev/null); then
+      SAMPLE_HEALTHY=false
+      LAST_FAILURE="kube-system pod query failed"
+    elif [ -z "${SYSTEM_PODS}" ]; then
+      SAMPLE_HEALTHY=false
+      LAST_FAILURE="No kube-system pods were returned"
+    else
+      FAILED_PODS=$(awk '$3 !~ /^(Running|Completed|Succeeded)$/ { count++ } END { print count + 0 }' \
+        <<< "${SYSTEM_PODS}")
+      if [ "${FAILED_PODS}" -gt 0 ]; then
+        SAMPLE_HEALTHY=false
+        LAST_FAILURE="${FAILED_PODS} kube-system pods are not healthy"
+      fi
+    fi
+  fi
 
-echo "      Nodes: ${TOTAL_NODES} total, ${NOT_READY} not-ready"
+  if [ "${SAMPLE_HEALTHY}" = true ]; then
+    if [ "${CURRENT_NODE_SET}" != "${STABLE_NODE_SET}" ]; then
+      STABLE_NODE_SET="${CURRENT_NODE_SET}"
+      STABLE_SINCE="${NOW}"
+      echo "      Attempt ${ATTEMPT}: Ready node set changed; stability timer restarted"
+    fi
 
-if [ "${NOT_READY}" -gt "0" ]; then
-  echo "::error title=Nodes Not Ready::${NOT_READY}/${TOTAL_NODES} node(s) not Ready in ${CLUSTER_LABEL}"
-  echo ""
-  echo "--- Node Status ---"
-  kubectl get nodes --no-headers --request-timeout="${HEALTH_TIMEOUT}s" | grep -v -E "\sReady\s" || true
-  echo "-------------------"
-  exit 1
-fi
-echo "      All ${TOTAL_NODES} nodes are Ready"
+    STABLE_FOR=$((NOW - STABLE_SINCE))
+    if [ "${STABLE_FOR}" -ge "${CLUSTER_STABILITY_WINDOW}" ]; then
+      echo "      Cluster remained healthy with the expected ${TOTAL_NODES} node(s) for ${STABLE_FOR}s"
+      break
+    fi
+    LAST_FAILURE="Healthy sample has only been stable for ${STABLE_FOR}s"
+  else
+    STABLE_SINCE=0
+    STABLE_NODE_SET=""
+  fi
 
-# ── 步驟 5：檢查系統 pod ────────────────────────────────────────────────────────────────
-echo "[5/5] Checking critical system pods (kube-system)..."
+  if [ "${NOW}" -ge "${DEADLINE}" ]; then
+    echo "::error title=Cluster Stability Timeout::${CLUSTER_LABEL} did not remain healthy for ${CLUSTER_STABILITY_WINDOW}s: ${LAST_FAILURE}"
+    echo ""
+    echo "--- Node Status ---"
+    kubectl get nodes --request-timeout="${HEALTH_TIMEOUT}s" || true
+    echo "--- Unhealthy kube-system Pods ---"
+    kubectl get pods -n kube-system --no-headers --request-timeout="${HEALTH_TIMEOUT}s" 2>/dev/null |
+      awk '$3 !~ /^(Running|Completed|Succeeded)$/ { print }' || true
+    echo "-------------------"
+    exit 1
+  fi
 
-if ! SYSTEM_PODS=$(kubectl get pods -n kube-system --no-headers \
-  --request-timeout="${HEALTH_TIMEOUT}s" 2>/dev/null); then
-  echo "::error title=System Pod Query Failed::Unable to query kube-system pods in ${CLUSTER_LABEL}"
-  exit 1
-fi
-
-FAILED_PODS=$(awk '$3 !~ /^(Running|Completed|Succeeded)$/ { count++ } END { print count + 0 }' \
-  <<< "${SYSTEM_PODS}")
-
-if [ "${FAILED_PODS}" -gt "0" ]; then
-  echo "::error title=System Pods Degraded::${FAILED_PODS} system pod(s) not running in ${CLUSTER_LABEL}"
-  awk '$3 !~ /^(Running|Completed|Succeeded)$/ { print }' <<< "${SYSTEM_PODS}"
-  echo ""
-  echo "============================================================"
-  echo " RESULT: ${CLUSTER_LABEL} → UNHEALTHY ✗"
-  echo " Nodes=${TOTAL_NODES}/Ready, System-Pods-Failed=${FAILED_PODS}"
-  echo "============================================================"
-  exit 1
-fi
-echo "      System pods: OK"
+  REMAINING=$((DEADLINE - NOW))
+  echo "      Attempt ${ATTEMPT}: ${LAST_FAILURE}; ${REMAINING}s remaining"
+  sleep "${CLUSTER_STABILITY_POLL_INTERVAL}"
+done
 
 # ── 摘要 ────────────────────────────────────────────────────────────────────────────
 echo ""

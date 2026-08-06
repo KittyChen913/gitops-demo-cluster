@@ -94,6 +94,7 @@ jobs:
           for ENVIRONMENT in ${ENVIRONMENTS}; do
             if ! LABELS=$(CLUSTER_ENV="${ENVIRONMENT}" \
               CLUSTER_LABELS="${LABEL_INPUT}" \
+              DISCOVERY_OUTPUT_MODE="targets" \
               bash scripts/discover-clusters.sh); then
               echo "::error title=Cluster Discovery Failed::Unable to discover clusters for ${ENVIRONMENT}"
               DISCOVERY_FAILURES=$(jq -cn \
@@ -104,7 +105,7 @@ jobs:
             fi
 
             ENV_TARGETS=$(jq -c --arg environment "${ENVIRONMENT}" \
-              '[.[] | {environment: $environment, cluster_label: .}]' <<< "${LABELS}")
+              '[.[] | . + {environment: $environment}]' <<< "${LABELS}")
             TARGETS=$(jq -cn \
               --argjson current "${TARGETS}" \
               --argjson next "${ENV_TARGETS}" \
@@ -180,6 +181,7 @@ jobs:
         env:
           CLUSTER_ENV: ${{ matrix.environment }}
           CLUSTER_LABEL: ${{ matrix.cluster_label }}
+          EXPECTED_NODE_COUNT: ${{ matrix.expected_node_count }}
         run: bash scripts/check-cluster-health.sh
 
       - name: Post Cluster Summary

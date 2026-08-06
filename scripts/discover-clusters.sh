@@ -5,11 +5,20 @@
 set -euo pipefail
 
 : "${CLUSTER_ENV:?Required env var: CLUSTER_ENV (dev|prod)}"
+DISCOVERY_OUTPUT_MODE="${DISCOVERY_OUTPUT_MODE:-labels}"
 
 case "${CLUSTER_ENV}" in
   dev | prod) ;;
   *)
     echo "::error title=Invalid Environment::Expected dev or prod, got: ${CLUSTER_ENV}" >&2
+    exit 1
+    ;;
+esac
+
+case "${DISCOVERY_OUTPUT_MODE}" in
+  labels | targets) ;;
+  *)
+    echo "::error title=Invalid Output Mode::Expected labels or targets, got: ${DISCOVERY_OUTPUT_MODE}" >&2
     exit 1
     ;;
 esac
@@ -93,4 +102,30 @@ else
   LABELS=("${STATE_LABELS[@]}")
 fi
 
-printf '%s\n' "${LABELS[@]}" | jq -Rsc 'split("\n") | map(select(length > 0))'
+if [ "${DISCOVERY_OUTPUT_MODE}" = "labels" ]; then
+  printf '%s\n' "${LABELS[@]}" | jq -Rsc 'split("\n") | map(select(length > 0))'
+  exit 0
+fi
+
+if ! EXPECTED_NODE_COUNTS_JSON=$(terraform -chdir="${TF_DIR}" output -json expected_node_counts); then
+  echo "::error title=Terraform Output Failed::Unable to read expected_node_counts for ${CLUSTER_ENV}" >&2
+  exit 1
+fi
+
+if ! jq -e \
+  --argjson inventory "${INVENTORY_JSON}" \
+  'type == "object" and
+   all(to_entries[]; (.value | type) == "number" and .value > 0 and (.value | floor) == .value) and
+   (keys | sort) == ($inventory | keys | sort)' \
+  <<< "${EXPECTED_NODE_COUNTS_JSON}" >/dev/null; then
+  echo "::error title=Invalid Node Count Inventory::expected_node_counts must contain one positive integer for every managed cluster" >&2
+  exit 1
+fi
+
+REQUESTED_LABELS_JSON=$(printf '%s\n' "${LABELS[@]}" |
+  jq -Rsc 'split("\n") | map(select(length > 0))')
+
+jq -cn \
+  --argjson labels "${REQUESTED_LABELS_JSON}" \
+  --argjson counts "${EXPECTED_NODE_COUNTS_JSON}" \
+  '$labels | map({cluster_label: ., expected_node_count: $counts[.]})'

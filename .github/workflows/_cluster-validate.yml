@@ -64,6 +64,7 @@ jobs:
         run: |
           MATRIX=$(CLUSTER_ENV="${ENV_INPUT}" \
             CLUSTER_LABELS="${LABELS_INPUT}" \
+            DISCOVERY_OUTPUT_MODE="targets" \
             bash scripts/discover-clusters.sh)
 
           COUNT=$(jq 'length' <<< "${MATRIX}")
@@ -80,7 +81,7 @@ jobs:
       fail-fast: false
       max-parallel: 1
       matrix:
-        cluster_label: ${{ fromJSON(needs.discover-clusters.outputs.matrix) }}
+        include: ${{ fromJSON(needs.discover-clusters.outputs.matrix) }}
 
     permissions:
       id-token: write
@@ -191,6 +192,7 @@ jobs:
         env:
           CLUSTER_ENV: ${{ inputs.environment }}
           CLUSTER_LABEL: ${{ matrix.cluster_label }}
+          EXPECTED_NODE_COUNT: ${{ matrix.expected_node_count }}
         run: bash scripts/check-cluster-health.sh
 
       - name: Run SA/RBAC Verification

@@ -54,6 +54,14 @@ output "cluster_ids" {
   )
 }
 
+output "expected_node_counts" {
+  description = "Desired node count keyed by cluster label."
+  value = merge(
+    { (module.mgmt.label) = var.mgmt_node_count },
+    { for key, cluster in module.worker : cluster.label => var.worker_node_count }
+  )
+}
+
 output "kubeconfigs" {
   description = "Decoded kubeconfigs (sensitive)."
   value = merge(

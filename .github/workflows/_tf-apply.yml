@@ -287,6 +287,11 @@ jobs:
           TF_VAR_linode_token: ${{ env.LINODE_TOKEN }}
           TF_VAR_write_kubeconfig_files: "false"
 
+      - name: Reconcile LKE Firewall Attachments
+        id: reconcile-firewall
+        if: inputs.enforce_cluster_boundary && steps.apply.outcome == 'success'
+        run: bash "${GITHUB_WORKSPACE}/scripts/reconcile-lke-firewall-attachments.sh"
+
       - name: Close automation VPN tunnel
         if: ${{ always() && steps.automation-vpn.outputs['state-directory'] != '' }}
         uses: ./.github/actions/close-automation-vpn-tunnel
@@ -305,6 +310,7 @@ jobs:
             echo "| Phase | \`${{ inputs.plan_key }}\` |"
             echo "| Outcome | \`${{ steps.apply.outcome }}\` |"
             echo "| Cluster boundary guard | \`${{ inputs.enforce_cluster_boundary }}\` |"
+            echo "| Firewall attachment reconciliation | \`${{ steps.reconcile-firewall.outcome || 'skipped' }}\` |"
             echo "| Commit | \`${{ github.sha }}\` |"
             echo "| Actor | @${{ github.actor }} |"
           } >> "$GITHUB_STEP_SUMMARY"

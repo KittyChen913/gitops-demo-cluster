@@ -27,8 +27,7 @@
       "required_runtime_evidence": [
         "akamai_lke_network_firewall_details",
         "platform_access_vpn_public_egress_cidr",
-        "github_actions_vpn_route_and_egress",
-        "unverified_dhcp_reboot_loop_hypothesis"
+        "github_actions_vpn_route_and_egress"
       ],
       "inbound_rules": [
         {
@@ -106,14 +105,6 @@
           "ipv4": ["192.168.128.0/17"],
           "purpose": "允許 LKE node pools 與 control plane 的 IPENCAP internal traffic。",
           "evidence": "akamai_lke_network_firewall_details"
-        },
-        {
-          "label": "lke-dhcp",
-          "protocol": "UDP",
-          "ports": "67,68",
-          "ipv4": ["192.168.128.0/17"],
-          "purpose": "疑似修正：Activity Feed 顯示 Cluster Firewall 套用後 node 隨即被 Lassie watchdog 反覆重開機並進入 Offline，時序上與缺少 DHCP 放行相符，但此因果關係未在 Akamai 官方文件中找到直接佐證，屬未證實假設，需實際 apply 後觀察 Activity Feed 與 Post-Provision Validation 結果才能確認是否解決問題。",
-          "evidence": "unverified_dhcp_reboot_loop_hypothesis"
         }
       ]
     },
@@ -125,8 +116,7 @@
       "required_runtime_evidence": [
         "akamai_lke_network_firewall_details",
         "platform_access_vpn_public_egress_cidr",
-        "github_actions_vpn_route_and_egress",
-        "unverified_dhcp_reboot_loop_hypothesis"
+        "github_actions_vpn_route_and_egress"
       ],
       "inbound_rules": [
         {
@@ -204,14 +194,6 @@
           "ipv4": ["192.168.128.0/17"],
           "purpose": "允許 LKE node pools 與 control plane 的 IPENCAP internal traffic。",
           "evidence": "akamai_lke_network_firewall_details"
-        },
-        {
-          "label": "lke-dhcp",
-          "protocol": "UDP",
-          "ports": "67,68",
-          "ipv4": ["192.168.128.0/17"],
-          "purpose": "疑似修正：Activity Feed 顯示 Cluster Firewall 套用後 node 隨即被 Lassie watchdog 反覆重開機並進入 Offline，時序上與缺少 DHCP 放行相符，但此因果關係未在 Akamai 官方文件中找到直接佐證，屬未證實假設，需實際 apply 後觀察 Activity Feed 與 Post-Provision Validation 結果才能確認是否解決問題。",
-          "evidence": "unverified_dhcp_reboot_loop_hypothesis"
         }
       ]
     }

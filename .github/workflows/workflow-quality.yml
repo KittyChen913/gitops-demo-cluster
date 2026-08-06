@@ -40,3 +40,12 @@ jobs:
 
       - name: Test Cluster Boundary Guard
         run: bash tests/test-cluster-boundary-plan.sh
+
+      - name: Test Cluster Health Stability
+        run: bash tests/test-check-cluster-health.sh
+
+      - name: Test Cluster Discovery Targets
+        run: bash tests/test-discover-cluster-targets.sh
+
+      - name: Test Firewall Attachment Reconciliation
+        run: bash tests/test-reconcile-lke-firewall-attachments.sh

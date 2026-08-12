@@ -13,4 +13,4 @@ write_kubeconfig_files = true
 # Cluster Firewall／Control Plane ACL activation 與 evidence-backed rules 由
 # config/worker-firewall/dev.json 管理，不在 tfvars 重複定義。
 # vpn_server_public_egress_ip 由 CI 依 contract 的 SSM path 注入，
-# 不得在 tfvars 保存或複製 Platform Access 的 public IP。
+# 不得在 tfvars 保存或複製 OpenVPN／DNS 的 public IP。

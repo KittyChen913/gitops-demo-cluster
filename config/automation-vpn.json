@@ -1,8 +1,8 @@
 {
   "schema_version": 2,
   "identity": "ci-cluster",
-  "profile_ssm_path": "/gitops/platform-access/automation/ci-cluster/PROFILE",
-  "password_ssm_path": "/gitops/platform-access/automation/ci-cluster/PASSWORD",
+  "profile_ssm_path": "/gitops/openvpn-dns/automation/ci-cluster/PROFILE",
+  "password_ssm_path": "/gitops/openvpn-dns/automation/ci-cluster/PASSWORD",
   "expected_tunnel_ip": "172.28.0.2",
   "environments": {
     "dev": {

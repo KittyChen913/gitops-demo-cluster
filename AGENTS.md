@@ -10,10 +10,10 @@
 
 - 本 repo管理LKE Cluster、dev/prod隔離、Management／Worker Cluster Firewall、Management Cluster Control Plane ACL，以及ArgoCD用ServiceAccount / RBAC / token。
 - 不在本 repo 安裝 ArgoCD 本體、建立 GitOps bootstrap manifest，或管理應用程式 workload。
-- Shared OpenVPN、VPN Server Firewall、Internal DNS、routing、NAT、groups與credential bootstrap由 `gitops-demo-platform-access` 管理；不得重新加入本repo。
+- Shared OpenVPN、VPN Server Firewall、Internal DNS、routing、NAT、groups與credential bootstrap由 `gitops-demo-openvpn-dns` 管理；不得重新加入本repo。
 - Shared OpenVPN建立於獨立Linode VM，不是在Kubernetes Cluster內建立。
-- `argocd-server-private` Service、NodeBalancer與其Cloud Firewall由 `gitops-demo-infra` 管理。
-- 下游 GitOps 管理由 `gitops-demo-infra` 與 `gitops-demo-apps` 負責。
+- `argocd-server-private` Service、NodeBalancer與其Cloud Firewall由 `gitops-demo-argocd` 管理。
+- 下游 GitOps 管理由 `gitops-demo-argocd` 與 `gitops-demo-apps` 負責。
 - 應用程式原始碼、Dockerfile 與映像建置 workflow 由 `gitops-demo-frontend`、`gitops-demo-backend` 負責，不屬於本 repo。
 
 部署分為兩階段：
@@ -21,7 +21,7 @@
 - Phase 1：`terraform/environments/dev`、`terraform/environments/prod`建立LKE Cluster、evidence-gated Cluster Firewall／Control Plane ACL並寫入cluster SSM metadata。
 - Phase 2：`terraform/environments/dev-k8s`、`terraform/environments/prod-k8s` 讀取 Phase 1 remote state，在叢集內建立 ArgoCD SA / RBAC / token，並寫入 SSM `token`。
 
-跨Repository從零部署順序固定為：Cluster foundation → Platform Access → Cluster network boundary convergence → Infra / ArgoCD → User Provisioning。
+跨Repository從零部署順序固定為：Cluster foundation → OpenVPN／DNS → Cluster network boundary convergence → ArgoCD → User Provisioning。
 
 ## 目錄與責任
 
@@ -134,8 +134,8 @@
 - node attachment只從LKE pool output推導，不手工維護instance IDs；新增或replacement node必須自動受同一Firewall保護。
 - NodeBalancer Firewall不能取代Cluster Firewall；DNS也不是authorization boundary。
 - runtime evidence未完成時使用`NOT_RUNTIME_VERIFIED`與停用adapter，不得因此猜測allowlist或啟用default-deny。
-- 需要連線Kubernetes API server建立ArgoCD SA/RBAC/token的apply（`dev-k8s`／`prod-k8s`，判斷式為`enforce_cluster_boundary=false`）改經`config/automation-vpn.json`定義的automation VPN tunnel連線Management／Worker Cluster API endpoint，避免被只允許VPN來源的Control Plane ACL擋下；tunnel open/close composite action（`.github/actions/{open,close}-automation-vpn-tunnel`）與執行腳本（`scripts/manage-automation-vpn-tunnel.sh`）由本repo自行擁有與維護，只使用`./`本地相對路徑引用，不得改為跨repo`uses:`參照、不得以`gitops-demo-platform-access`的commit SHA作為workflow runtime dependency。Shared OpenVPN Server、automation identity簽發、SSM credential publishing與VPN public egress IP仍由`gitops-demo-platform-access`管理，屬platform service contract，只能透過SSM參數消費，不得取得其Git history、branch、tag或檔案布局的依賴。
-- `config/automation-vpn.json`的`target_parameter_paths`必須對應SSM上實際存在的`/gitops/<env>/clusters/<cluster-label>/api-endpoint`；新增Worker Cluster時需同步更新此清單。`expected_tunnel_ip`是本repo宣告的ci-cluster固定`conn_ip`，若`gitops-demo-platform-access`的`config/automation-identities.json`變更該身份的`conn_ip`，需人工同步更新此欄位；本欄位只是本repo自行宣告的期望值比對基準，不是跨repo程式碼相依。
+- 需要連線Kubernetes API server建立ArgoCD SA/RBAC/token的apply（`dev-k8s`／`prod-k8s`，判斷式為`enforce_cluster_boundary=false`）改經`config/automation-vpn.json`定義的automation VPN tunnel連線Management／Worker Cluster API endpoint，避免被只允許VPN來源的Control Plane ACL擋下；tunnel open/close composite action（`.github/actions/{open,close}-automation-vpn-tunnel`）與執行腳本（`scripts/manage-automation-vpn-tunnel.sh`）由本repo自行擁有與維護，只使用`./`本地相對路徑引用，不得改為跨repo`uses:`參照、不得以`gitops-demo-openvpn-dns`的commit SHA作為workflow runtime dependency。Shared OpenVPN Server、automation identity簽發、SSM credential publishing與VPN public egress IP仍由`gitops-demo-openvpn-dns`管理，屬platform service contract，只能透過SSM參數消費，不得取得其Git history、branch、tag或檔案布局的依賴。
+- `config/automation-vpn.json`的`target_parameter_paths`必須對應SSM上實際存在的`/gitops/<env>/clusters/<cluster-label>/api-endpoint`；新增Worker Cluster時需同步更新此清單。`expected_tunnel_ip`是本repo宣告的ci-cluster固定`conn_ip`，若`gitops-demo-openvpn-dns`的`config/automation-identities.json`變更該身份的`conn_ip`，需人工同步更新此欄位；本欄位只是本repo自行宣告的期望值比對基準，不是跨repo程式碼相依。
 
 ## 安全與破壞性操作
 
@@ -153,7 +153,7 @@
 - `cluster-post-provision.yml` 可由 apply workflow 呼叫，也可手動重新驗證；它不應重新 apply Terraform。
 - 完整驗證流程由 `_cluster-validate.yml` 封裝：每個 Cluster 只讀取一次專屬 SSM path，再執行 health check、SA/RBAC verify、readiness validation。
 - `cluster-health-check.yml` 是獨立健康檢查，不部署資源，也不驗證 SA/RBAC。
-- cluster post-provision／health workflows不驗證或設定Shared OpenVPN；該ownership屬`gitops-demo-platform-access`。
+- cluster post-provision／health workflows不驗證或設定Shared OpenVPN；該ownership屬`gitops-demo-openvpn-dns`。
 - 排程健康檢查必須同時探索 dev 與 prod；手動與 workflow_call 則只檢查指定 environment。
 - 排程失敗必須建立或更新單一 incident issue，恢復後自動關閉；matrix job 不可各自建立重複 issue。
 - `cluster_label` 空值代表從對應 Phase 1 remote state 的非機密 `cluster_ids` output 探索所有受管 cluster；指定 label 時必須確認它存在於該 state，找不到 cluster 時應失敗，不可靜默成功。SSM 只提供逐叢集連線資料，不作為 cluster inventory。

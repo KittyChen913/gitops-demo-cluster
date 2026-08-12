@@ -2,7 +2,7 @@
 
 # 本 repo 自有的 automation VPN tunnel adapter；只處理 runner-local OpenVPN
 # process 與精確的 split-tunnel host routes，Cloud、Firewall 與 Access Server
-# desired state 由 gitops-demo-platform-access 管理，本檔案不得反向依賴該
+# desired state 由 gitops-demo-openvpn-dns 管理，本檔案不得反向依賴該
 # repo 的 Git layout、branch、tag 或 commit SHA。
 set -euo pipefail
 

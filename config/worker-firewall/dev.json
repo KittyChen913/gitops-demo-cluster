@@ -4,7 +4,7 @@
   "inbound_policy": "DROP",
   "outbound_policy": "ACCEPT",
   "vpn_server": {
-    "ssm_parameter_path": "/gitops/platform-access/network/VPN_PUBLIC_EGRESS_IP"
+    "ssm_parameter_path": "/gitops/openvpn-dns/network/VPN_PUBLIC_EGRESS_IP"
   },
   "control_plane_acl": {
     "activation_enabled": true,
@@ -34,21 +34,21 @@
           "label": "vpn-server-tcp",
           "protocol": "TCP",
           "ipv4_source": "platform_access_vpn_server",
-          "purpose": "只允許經 Platform Access VPN Server 進入 node 的外部 TCP 流量。",
+          "purpose": "Only allow external TCP traffic entering nodes through the OpenVPN/DNS VPN Server.",
           "evidence": "platform_access_vpn_public_egress_cidr"
         },
         {
           "label": "vpn-server-udp",
           "protocol": "UDP",
           "ipv4_source": "platform_access_vpn_server",
-          "purpose": "只允許經 Platform Access VPN Server 進入 node 的外部 UDP 流量。",
+          "purpose": "Only allow external UDP traffic entering nodes through the OpenVPN/DNS VPN Server.",
           "evidence": "platform_access_vpn_public_egress_cidr"
         },
         {
           "label": "vpn-server-icmp",
           "protocol": "ICMP",
           "ipv4_source": "platform_access_vpn_server",
-          "purpose": "只允許經 Platform Access VPN Server 進入 node 的外部 ICMP 流量。",
+          "purpose": "Only allow external ICMP traffic entering nodes through the OpenVPN/DNS VPN Server.",
           "evidence": "platform_access_vpn_public_egress_cidr"
         },
         {
@@ -123,21 +123,21 @@
           "label": "vpn-server-tcp",
           "protocol": "TCP",
           "ipv4_source": "platform_access_vpn_server",
-          "purpose": "只允許經 Platform Access VPN Server 進入 node 的外部 TCP 流量。",
+          "purpose": "Only allow external TCP traffic entering nodes through the OpenVPN/DNS VPN Server.",
           "evidence": "platform_access_vpn_public_egress_cidr"
         },
         {
           "label": "vpn-server-udp",
           "protocol": "UDP",
           "ipv4_source": "platform_access_vpn_server",
-          "purpose": "只允許經 Platform Access VPN Server 進入 node 的外部 UDP 流量。",
+          "purpose": "Only allow external UDP traffic entering nodes through the OpenVPN/DNS VPN Server.",
           "evidence": "platform_access_vpn_public_egress_cidr"
         },
         {
           "label": "vpn-server-icmp",
           "protocol": "ICMP",
           "ipv4_source": "platform_access_vpn_server",
-          "purpose": "只允許經 Platform Access VPN Server 進入 node 的外部 ICMP 流量。",
+          "purpose": "Only allow external ICMP traffic entering nodes through the OpenVPN/DNS VPN Server.",
           "evidence": "platform_access_vpn_public_egress_cidr"
         },
         {

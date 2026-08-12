@@ -4,7 +4,7 @@
   "inbound_policy": "DROP",
   "outbound_policy": "ACCEPT",
   "vpn_server": {
-    "ssm_parameter_path": "/gitops/platform-access/network/VPN_PUBLIC_EGRESS_IP"
+    "ssm_parameter_path": "/gitops/openvpn-dns/network/VPN_PUBLIC_EGRESS_IP"
   },
   "control_plane_acl": {
     "activation_enabled": false,

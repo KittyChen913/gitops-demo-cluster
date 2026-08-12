@@ -43,8 +43,8 @@ runs:
       run: |
         set -euo pipefail
         [[ "${IDENTITY}" == "ci-cluster" ]]
-        test "${PROFILE_PARAMETER}" = "/gitops/platform-access/automation/${IDENTITY}/PROFILE"
-        test "${PASSWORD_PARAMETER}" = "/gitops/platform-access/automation/${IDENTITY}/PASSWORD"
+        test "${PROFILE_PARAMETER}" = "/gitops/openvpn-dns/automation/${IDENTITY}/PROFILE"
+        test "${PASSWORD_PARAMETER}" = "/gitops/openvpn-dns/automation/${IDENTITY}/PASSWORD"
         if [[ -n "${EXPECTED_TUNNEL_IP}" ]]; then
           [[ "${EXPECTED_TUNNEL_IP}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]
         fi

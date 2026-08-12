@@ -60,7 +60,7 @@ variable "write_ssm_parameters" {
 }
 
 variable "vpn_server_public_egress_ip" {
-  description = "Platform Access 發布的 VPN Server public egress IPv4；由 CI 從 SSM canonical contract 注入。"
+  description = "OpenVPN/DNS publishes the VPN Server public egress IPv4; CI injects it from the canonical SSM contract."
   type        = string
 
   validation {

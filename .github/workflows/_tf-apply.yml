@@ -97,7 +97,7 @@ jobs:
         with:
           ssm_param_path: "/gitops/shared"
 
-      - name: Resolve Platform Access VPN source
+      - name: Resolve OpenVPN/DNS VPN source
         id: vpn-source
         if: inputs.enforce_cluster_boundary
         env:
@@ -109,7 +109,7 @@ jobs:
             --query Parameter.Value \
             --output text)"
           if [ -z "${vpn_ip}" ] || [ "${vpn_ip}" = "None" ]; then
-            echo "::error title=Missing VPN Source::Platform Access VPN public egress IP is unavailable"
+            echo "::error title=Missing VPN Source::OpenVPN/DNS VPN public egress IP is unavailable"
             exit 1
           fi
           echo "ip=${vpn_ip}" >> "$GITHUB_OUTPUT"
@@ -139,8 +139,8 @@ jobs:
             --arg target_env "${TARGET_ENV}" \
             '.schema_version == 2 and
              .identity == "ci-cluster" and
-             (.profile_ssm_path == "/gitops/platform-access/automation/ci-cluster/PROFILE") and
-             (.password_ssm_path == "/gitops/platform-access/automation/ci-cluster/PASSWORD") and
+             (.profile_ssm_path == "/gitops/openvpn-dns/automation/ci-cluster/PROFILE") and
+             (.password_ssm_path == "/gitops/openvpn-dns/automation/ci-cluster/PASSWORD") and
              (.expected_tunnel_ip | test("^([0-9]{1,3}\\.){3}[0-9]{1,3}$"))' \
             "${CONTRACT_PATH}" >/dev/null
 

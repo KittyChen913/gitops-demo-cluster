@@ -46,8 +46,8 @@ if [[ $(jq -r '.inbound_policy // empty' "${contract_path}") != "DROP" ]] ||
   reject "policy must remain inbound DROP and outbound ACCEPT"
 fi
 [[ $(jq -r '.vpn_server.ssm_parameter_path // empty' "${contract_path}") == \
-  "/gitops/platform-access/network/VPN_PUBLIC_EGRESS_IP" ]] ||
-  reject "VPN Server source must use the Platform Access SSM canonical contract"
+  "/gitops/openvpn-dns/network/VPN_PUBLIC_EGRESS_IP" ]] ||
+  reject "VPN Server source must use the OpenVPN/DNS SSM canonical contract"
 
 invalid_cluster=$(
   jq -r '

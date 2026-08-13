@@ -29,7 +29,7 @@
 #
 # 執行順序：
 #   ┌─────────────────────────────────────────────────────────────────┐
-#   │  [品質閘門] workflow-quality.yml                                 │
+#   │  [品質閘門] validation.yml                                       │
 #   │  actionlint + ShellCheck                                         │
 #   ├─────────────────────────────────────────────────────────────────┤
 #   │  [初始化] bootstrap-backend                                     │
@@ -44,20 +44,20 @@
 #   │  讀取: S3 backend 中的 Phase 1 remote state                    │
 #   │  寫入: SSM token（SecureString）                               │
 #   ├─────────────────────────────────────────────────────────────────┤
-#   │  [佈建後驗證] cluster-post-provision.yml（workflow_call）        │
+#   │  [佈建後驗證] post-provision-validation.yml（workflow_call）     │
 #   │  統籌: 健康檢查 → SA/RBAC 驗證 → 就緒檢查                │
 #   └─────────────────────────────────────────────────────────────────┘
 #
 # 環境保護：
 #   prod — Phase 1 與 Phase 2 執行前需手動批准。
-#          _tf-apply.yml 設定 `environment: prod`，觸發 GitHub Environment 保護門戳。
+#          terraform-apply-stage.yml 設定 `environment: prod`，觸發 GitHub Environment 保護門戳。
 #
 # 並行控制：
 #   同時只允許一個生產 apply。新的執行會排隊而非取消。
 #   與 terraform-apply-dev.yml 的 dev concurrency group 完全分離。
 # =============================================================================
 
-name: "Terraform Apply — Production"
+name: "Terraform Apply - Prod"
 
 on:
   # ── 主要觸發：明確的 semantic version 發佈 tag ──────────────────────────────────
@@ -86,7 +86,8 @@ env:
   # Dev 部署一律由 terraform-apply-dev.yml 處理。
   TARGET_ENV: prod
 
-# 可重用 workflow（_bootstrap-backend.yml、_tf-apply.yml）要求 id-token: write
+# 可重用 workflow（terraform-backend-bootstrap.yml、
+# terraform-apply-stage.yml）要求 id-token: write
 # 來執行 AWS OIDC 身份驗證。頂層 permissions 必須明確授予，
 # 否則 nested job 會被限制為 id-token: none。
 permissions:
@@ -96,8 +97,8 @@ permissions:
 jobs:
   # ── Quality Gate：tag 與手動 apply 都必須先通過靜態檢查 ────────────────────
   quality:
-    name: "Workflow Quality Gate"
-    uses: ./.github/workflows/workflow-quality.yml
+    name: "Validation"
+    uses: ./.github/workflows/validation.yml
 
   # ── 前置檢查：確認必要的 Secret 已設定 ─────────────────────────────────────
   preflight:
@@ -163,17 +164,17 @@ jobs:
   bootstrap-backend:
     name: "Bootstrap S3 Backend [prod]"
     needs: preflight
-    uses: ./.github/workflows/_bootstrap-backend.yml
+    uses: ./.github/workflows/terraform-backend-bootstrap.yml
     secrets: inherit
     with:
       environment: prod
 
   # ── Phase 1：建立 LKE Cluster 與 Cluster 邊界 ──────────────────────────────
-  # 注意: _tf-apply.yml 內部設定 `environment: prod`，執行前觸發手動批准門戳。
+  # 注意: terraform-apply-stage.yml 內部設定 `environment: prod`，執行前觸發手動批准門戳。
   apply-infrastructure:
     name: "Phase 1 — Apply Infrastructure [prod]"
     needs: [preflight, bootstrap-backend]
-    uses: ./.github/workflows/_tf-apply.yml
+    uses: ./.github/workflows/terraform-apply-stage.yml
     secrets: inherit
     with:
       environment: prod
@@ -182,11 +183,11 @@ jobs:
       enforce_cluster_boundary: true
 
   # ── 階段 2：ArgoCD SA / RBAC / Token ───────────────────────────────────────────────
-  # 注意: 同樣由 _tf-apply.yml 內部的 GitHub Environment "prod" 批准門戳把射。
+  # 注意: 同樣由 terraform-apply-stage.yml 內部的 GitHub Environment "prod" 批准門戳把射。
   apply-k8s:
     name: "Phase 2 — Apply K8s SA/RBAC [prod]"
     needs: [preflight, apply-infrastructure]
-    uses: ./.github/workflows/_tf-apply.yml
+    uses: ./.github/workflows/terraform-apply-stage.yml
     secrets: inherit
     with:
       environment: prod
@@ -200,7 +201,7 @@ jobs:
     if: |
       needs.apply-k8s.result == 'success' &&
       (github.event_name != 'workflow_dispatch' || inputs.skip_post_provision != true)
-    uses: ./.github/workflows/cluster-post-provision.yml
+    uses: ./.github/workflows/post-provision-validation.yml
     secrets: inherit
     with:
       environment: prod

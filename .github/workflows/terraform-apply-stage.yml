@@ -1,5 +1,5 @@
 # =============================================================================
-# _tf-apply.yml — 可重用 Terraform Apply
+# terraform-apply-stage.yml — 可重用 Terraform Apply
 # =============================================================================
 # 呼叫者: terraform-apply-dev.yml, terraform-apply-prod.yml
 #
@@ -18,7 +18,7 @@
 #   - Concurrency group 防止相同環境同時 apply
 # =============================================================================
 
-name: "[Reusable] Terraform Apply"
+name: "Terraform Apply Stage"
 
 on:
   workflow_call:
@@ -51,7 +51,7 @@ on:
 
 jobs:
   apply:
-    name: "tf apply [${{ inputs.plan_key }}]"
+    name: "Apply [${{ inputs.plan_key }}]"
     runs-on: ubuntu-latest
 
     permissions:

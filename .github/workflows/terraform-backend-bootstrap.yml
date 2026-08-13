@@ -1,5 +1,5 @@
 # =============================================================================
-# _bootstrap-backend.yml — 可重用 S3 Backend 初始化
+# terraform-backend-bootstrap.yml — 可重用 S3 Backend 初始化
 # =============================================================================
 # 呼叫者: terraform-apply-dev.yml, terraform-apply-prod.yml
 #
@@ -14,7 +14,7 @@
 #   - 原生 S3 鎖定（use_lockfile=true）— 需要 Terraform >= 1.10
 # =============================================================================
 
-name: "[Reusable] Bootstrap S3 Backend"
+name: "Terraform Backend Bootstrap"
 
 on:
   workflow_call:

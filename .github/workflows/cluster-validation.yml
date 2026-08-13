@@ -1,11 +1,11 @@
 # =============================================================================
-# _cluster-validate.yml — 可重用 Cluster 驗證
+# cluster-validation.yml — 可重用 Cluster 驗證
 # =============================================================================
 # 每個 matrix job 只讀取目標 Cluster 的單一 SSM path，並共用該組認證依序執行
 # health、SA/RBAC 與 readiness 檢查，避免重複建立 runner 與重複解密參數。
 # =============================================================================
 
-name: "[Reusable] Cluster Validation"
+name: "Cluster Validation"
 
 on:
   workflow_call:

@@ -1,5 +1,5 @@
 # =============================================================================
-# cluster-post-provision.yml — Post-Provision 指令統籌
+# post-provision-validation.yml — Post-Provision 指令統籌
 # =============================================================================
 #
 # Terraform Phase 1 + Phase 2 apply 後，統籌執行驗證指令。
@@ -25,7 +25,7 @@
 #   - kubeconfig 為臨時檔案（tempfile，由 trap 刪除）
 # =============================================================================
 
-name: "Cluster Post-Provision Validation"
+name: "Post-Provision Validation"
 
 on:
   workflow_call:
@@ -68,7 +68,7 @@ permissions:
 jobs:
   validate:
     name: "Post-Provision [${{ inputs.environment }}]"
-    uses: ./.github/workflows/_cluster-validate.yml
+    uses: ./.github/workflows/cluster-validation.yml
     with:
       environment: ${{ inputs.environment }}
       cluster_labels: ${{ inputs.cluster_labels }}

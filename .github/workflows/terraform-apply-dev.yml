@@ -20,7 +20,7 @@
 #
 # 執行順序：
 #   ┌─────────────────────────────────────────────────────────────────┐
-#   │  [品質閘門] workflow-quality.yml                                 │
+#   │  [品質閘門] validation.yml                                       │
 #   │  actionlint + ShellCheck                                         │
 #   ├─────────────────────────────────────────────────────────────────┤
 #   │  [初始化] bootstrap-backend                                     │
@@ -35,7 +35,7 @@
 #   │  讀取: S3 backend 中的 Phase 1 remote state                    │
 #   │  寫入: SSM token（SecureString）                               │
 #   ├─────────────────────────────────────────────────────────────────┤
-#   │  [佈建後驗證] cluster-post-provision.yml（workflow_call）        │
+#   │  [佈建後驗證] post-provision-validation.yml（workflow_call）     │
 #   │  統籌: 健康檢查 → SA/RBAC 驗證 → 就緒檢查               │
 #   └─────────────────────────────────────────────────────────────────┘
 #
@@ -46,7 +46,7 @@
 #   同時只允許一個 dev apply。新的執行會排隊而非取消。
 # =============================================================================
 
-name: "Terraform Apply — Dev"
+name: "Terraform Apply - Dev"
 
 on:
   push:
@@ -89,7 +89,8 @@ env:
   # 生產部署一律由 terraform-apply-prod.yml 處理。
   TARGET_ENV: dev
 
-# 可重用 workflow（_bootstrap-backend.yml、_tf-apply.yml）要求 id-token: write
+# 可重用 workflow（terraform-backend-bootstrap.yml、
+# terraform-apply-stage.yml）要求 id-token: write
 # 來執行 AWS OIDC 身份驗證。頂層 permissions 必須明確授予，
 # 否則 nested job 會被限制為 id-token: none。
 permissions:
@@ -99,8 +100,8 @@ permissions:
 jobs:
   # ── Quality Gate：直接 push 或手動 apply 也必須先通過靜態檢查 ────────────────
   quality:
-    name: "Workflow Quality Gate"
-    uses: ./.github/workflows/workflow-quality.yml
+    name: "Validation"
+    uses: ./.github/workflows/validation.yml
 
   # ── 前置檢查：確認必要的 Secret 已設定 ─────────────────────────────────────
   preflight:
@@ -132,7 +133,7 @@ jobs:
   bootstrap-backend:
     name: "Bootstrap S3 Backend [dev]"
     needs: preflight
-    uses: ./.github/workflows/_bootstrap-backend.yml
+    uses: ./.github/workflows/terraform-backend-bootstrap.yml
     secrets: inherit
     with:
       environment: ${{ needs.preflight.outputs.target_env }}
@@ -141,7 +142,7 @@ jobs:
   apply-infrastructure:
     name: "Phase 1 — Apply Infrastructure [${{ needs.preflight.outputs.target_env }}]"
     needs: [preflight, bootstrap-backend]
-    uses: ./.github/workflows/_tf-apply.yml
+    uses: ./.github/workflows/terraform-apply-stage.yml
     secrets: inherit
     with:
       environment: ${{ needs.preflight.outputs.target_env }}
@@ -153,7 +154,7 @@ jobs:
   apply-k8s:
     name: "Phase 2 — Apply K8s SA/RBAC [${{ needs.preflight.outputs.target_env }}]"
     needs: [preflight, apply-infrastructure]
-    uses: ./.github/workflows/_tf-apply.yml
+    uses: ./.github/workflows/terraform-apply-stage.yml
     secrets: inherit
     with:
       environment: ${{ needs.preflight.outputs.target_env }}
@@ -167,7 +168,7 @@ jobs:
     if: |
       needs.apply-k8s.result == 'success' &&
       (github.event_name != 'workflow_dispatch' || inputs.skip_post_provision != true)
-    uses: ./.github/workflows/cluster-post-provision.yml
+    uses: ./.github/workflows/post-provision-validation.yml
     secrets: inherit
     with:
       environment: ${{ needs.preflight.outputs.target_env }}

@@ -132,7 +132,7 @@ jobs:
     name: "Plan [dev/clusters]"
     needs: detect-changes
     if: needs.detect-changes.outputs.dev_clusters == 'true'
-    uses: ./.github/workflows/_tf-plan.yml
+    uses: ./.github/workflows/terraform-plan-stage.yml
     secrets: inherit
     with:
       environment: "dev"
@@ -145,7 +145,7 @@ jobs:
     name: "Plan [dev/k8s]"
     needs: detect-changes
     if: needs.detect-changes.outputs.dev_k8s == 'true'
-    uses: ./.github/workflows/_tf-plan.yml
+    uses: ./.github/workflows/terraform-plan-stage.yml
     secrets: inherit
     with:
       environment: "dev"
@@ -157,7 +157,7 @@ jobs:
     name: "Plan [prod/clusters]"
     needs: detect-changes
     if: needs.detect-changes.outputs.prod_clusters == 'true'
-    uses: ./.github/workflows/_tf-plan.yml
+    uses: ./.github/workflows/terraform-plan-stage.yml
     secrets: inherit
     with:
       environment: "prod"
@@ -170,7 +170,7 @@ jobs:
     name: "Plan [prod/k8s]"
     needs: detect-changes
     if: needs.detect-changes.outputs.prod_k8s == 'true'
-    uses: ./.github/workflows/_tf-plan.yml
+    uses: ./.github/workflows/terraform-plan-stage.yml
     secrets: inherit
     with:
       environment: "prod"
@@ -180,7 +180,7 @@ jobs:
   # ── PR 狀態門戳 ───────────────────────────────────────────────────────────────────────
   # 必要狀態檢查：所有已完成的 plan 必須成功。
   plan-gate:
-    name: "Plan Gate (all envs)"
+    name: "Plan Gate"
     runs-on: ubuntu-latest
     needs: [detect-changes, plan-dev-clusters, plan-dev-k8s, plan-prod-clusters, plan-prod-k8s]
     if: always()

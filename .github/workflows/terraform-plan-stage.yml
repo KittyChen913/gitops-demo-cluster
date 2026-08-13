@@ -1,5 +1,5 @@
 # =============================================================================
-# _tf-plan.yml — 可重用 Terraform Plan
+# terraform-plan-stage.yml — 可重用 Terraform Plan
 # =============================================================================
 # 呼叫者: terraform-plan.yml
 #
@@ -14,7 +14,7 @@
 #   - terraform_wrapper=false 保留 -detailed-exitcode 的退出碼
 # =============================================================================
 
-name: "[Reusable] Terraform Plan"
+name: "Terraform Plan Stage"
 
 on:
   workflow_call:
@@ -43,7 +43,7 @@ on:
 
 jobs:
   plan:
-    name: "tf plan [${{ inputs.plan_key }}]"
+    name: "Plan [${{ inputs.plan_key }}]"
     runs-on: ubuntu-latest
 
     permissions:

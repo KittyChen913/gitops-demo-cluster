@@ -21,7 +21,7 @@
   "clusters": {
     "management": {
       "role": "management",
-      "firewall_label": "lke-dev-mgmt-nodes",
+      "firewall_label": "lke-dev-mgmt-node-firewall",
       "evidence_status": "VERIFIED",
       "activation_enabled": true,
       "required_runtime_evidence": [
@@ -110,7 +110,7 @@
     },
     "ateam": {
       "role": "worker",
-      "firewall_label": "lke-dev-ateam-workers",
+      "firewall_label": "lke-dev-ateam-node-firewall",
       "evidence_status": "VERIFIED",
       "activation_enabled": true,
       "required_runtime_evidence": [

@@ -1,6 +1,6 @@
 # AGENTS.md
 
-本文件是 `gitops-demo-cluster` 的專案總規範，適用於整個 repository。任何 Codex 或其他代理在此專案中工作時，請先閱讀本文件，再參考 `README.md` 與 `docs/ci-cd.md`。
+本文件是 `gitops-demo-cluster` 的專案總規範，適用於整個 repository。任何 Codex 或其他代理在此專案中工作時，請先閱讀本文件，再參考 `README.md` 與 docs 站台的 [Cluster workflow](https://github.com/KittyChen913/gitops-demo-docs/blob/master/docs/CI%EF%BC%8FCD%20Workflow/cluster.md)。
 
 ## 專案定位
 
@@ -32,10 +32,10 @@
 - `terraform/environments/dev/`、`prod/`：Phase 1 cluster provisioning。
 - `config/worker-firewall/`：既有相容路徑；dev/prod schema v2 Cluster Firewall／Control Plane ACL canonical evidence與activation contract。
 - `terraform/environments/dev-k8s/`、`prod-k8s/`：Phase 2 Kubernetes provider、ArgoCD SA/RBAC/token 與 SSM token。
-- `.github/workflows/`：GitHub Actions orchestration；reusable workflow 以 `_` 開頭。
+- `.github/workflows/`：GitHub Actions orchestration；reusable workflow 以 `workflow_call` 觸發，檔名**不使用 `_` 前綴**（舊的 `_tf-apply.yml`、`_cluster-validate.yml` 這類命名已全面移除，現行為 `terraform-apply-stage.yml`、`terraform-plan-stage.yml`、`cluster-validation.yml`、`post-provision-validation.yml`、`terraform-backend-bootstrap.yml`）。
 - `.github/actions/`：專案內 composite actions。
+- `config/shared.json`：repo 契約檔；OIDC Role 名稱、GitHub Actions OIDC／AWS CLI region 與固定 SSM parameter name 的唯一來源，由 composite action 於執行期以 `jq` 讀取。
 - `scripts/`：post-provision、健康檢查與saved-plan safety guard scripts。
-- `docs/`：CI/CD 與操作文件。
 
 ## 工作原則
 
@@ -96,9 +96,14 @@
 - destroy 只由 `terraform-destroy.yml` 手動執行，且必須依序 Phase 2 再 Phase 1。
 - workflow/action/script或`.gitattributes`變更應觸發`terraform-apply-dev.yml`，並在Quality Gate成功後執行dev apply；不得因branch push部署prod。
 - 需要 AWS 存取時一律使用 `.github/actions/configure-aws-credentials` composite action 與 OIDC；不要直接在 workflow 呼叫 `aws-actions/configure-aws-credentials`。
+- 呼叫該 action 時**只傳語意 selector**（本 repo 目前只有 `role: deployment`），不得傳 IAM Role 名稱或 ARN。`aws-region` 已不是 input，region 由契約檔決定。
+- IAM Role 名稱、GitHub Actions OIDC／AWS CLI 使用的 AWS region，以及 repo 層級的固定 SSM parameter name，字面值**只存在於 `config/shared.json`**；`.github/` 底下不得再出現 `github-oidc-` 開頭的字串或寫死的 region。Terraform provider 與 backend 的 region 仍由既有 `variables.tf`／`backend.hcl` 管理。
+- 新增 Role 的正確做法是「在 `config/shared.json` 的 `.aws.oidc_roles` 加一個 key ＋ 呼叫端改傳新 selector」，action 邏輯不動。讀取端必須驗證 selector 對應值是非空字串，不需要另外維護白名單。
+- `config/shared.json` 的 `schema_version` 由讀取端以 `jq -e` 驗證，不符即 `exit 1`；改動契約檔結構時必須同步升版號與所有讀取端的期望值。
+- OIDC 憑證步驟的遮蔽範圍是固定契約：**帳號 ID 在寫入 `GITHUB_OUTPUT` 前先 `::add-mask::`，完整 Role ARN 一律不遮蔽**。Role 名稱不是機密，遮蔽它會讓 `AssumeRoleWithWebIdentity` 的失敗訊息無法判讀；帳號 ID 則另有 `mask-aws-account-id: true` 作為第二層。不得把整個 ARN 加回遮罩，也不得移除 action 內既有的 `::add-mask::${AWS_ACCOUNT_ID}`。
 - 所有需要 AWS 的 job 必須設定 `permissions: id-token: write` 與 `contents: read`。
 - `AWS_ACCOUNT_ID` 是唯一必要的 AWS 相關 GitHub Repository Secret。不要加入、宣告或傳遞 `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`。
-- Provider token 由 `.github/actions/get-ssm-parameters` 從 `/gitops/shared` 讀取後注入環境；workflow 不可引用 `secrets.LINODE_TOKEN`。
+- Provider token 由 `.github/actions/get-ssm-parameters` 精確讀取後注入環境；repo 層級的固定 parameter 一律傳 `name-selector`（例如 `linode_token`），只有執行期才決定的動態名稱或路徑才用 `ssm_param_name`／`ssm_param_path`。workflow 不可引用 `secrets.LINODE_TOKEN`。
 - CI Terraform 步驟必須設定 `TF_VAR_write_kubeconfig_files=false`，避免 kubeconfig 寫入 runner 磁碟。
 - Terraform plan/apply/destroy log 必須過濾 `token`、`secret`、`password`、`pass[word]` 等敏感行。
 - Workflow 與 composite action 的本機 validation 應依實際 syntax、expression、Shell execution path 與直接 consumers 選擇 `actionlint`、ShellCheck 或相關 contract checks，不得預設執行完整工具集合。
@@ -150,8 +155,8 @@
 
 ## Post-Provision 與 Health Check
 
-- `cluster-post-provision.yml` 可由 apply workflow 呼叫，也可手動重新驗證；它不應重新 apply Terraform。
-- 完整驗證流程由 `_cluster-validate.yml` 封裝：每個 Cluster 只讀取一次專屬 SSM path，再執行 health check、SA/RBAC verify、readiness validation。
+- `post-provision-validation.yml` 可由 apply workflow 呼叫，也可手動重新驗證；它不應重新 apply Terraform。
+- 完整驗證流程由 `cluster-validation.yml` 封裝：每個 Cluster 只讀取一次專屬 SSM path，再執行 health check、SA/RBAC verify、readiness validation。
 - `cluster-health-check.yml` 是獨立健康檢查，不部署資源，也不驗證 SA/RBAC。
 - cluster post-provision／health workflows不驗證或設定Shared OpenVPN；該ownership屬`gitops-demo-openvpn-dns`。
 - 排程健康檢查必須同時探索 dev 與 prod；手動與 workflow_call 則只檢查指定 environment。
@@ -177,12 +182,12 @@ actionlint <affected-workflow-or-action-files>
 
 當修改以下內容時，請同步檢查文件：
 
-- workflow trigger、path filter、approval、concurrency 或 secrets：更新 `docs/ci-cd.md` 與 README 的 CI/CD 摘要。
+- workflow trigger、path filter、approval、concurrency 或 secrets：更新 docs 站台的 [Cluster workflow](https://github.com/KittyChen913/gitops-demo-docs/blob/master/docs/CI%EF%BC%8FCD%20Workflow/cluster.md) 與 README 的 CI/CD 摘要。
 - Terraform state key、SSM path、cluster label、team、node sizing：更新 README。
-- Cluster Firewall／Control Plane ACL contract、evidence、attachment或guard：更新`docs/cluster-network-boundary.md`並同步檢查README與`docs/ci-cd.md`。
-- destroy 流程或安全限制：更新 README 與 `docs/ci-cd.md`。
-- manual command、failure handling、post-provision、health check 或 GitHub Environment 設定有變動時，更新 `docs/ci-cd.md`。
-- README 的操作範例需與 `docs/ci-cd.md` 保持一致，尤其是 `gh workflow run`、apply、health check、post-provision 與 destroy。
+- Cluster Firewall／Control Plane ACL contract、evidence、attachment或guard：更新 docs 站台的 [Cluster Network Boundary](https://github.com/KittyChen913/gitops-demo-docs/blob/master/docs/cluster-network-boundary.md) 頁，並同步檢查 README 與 [Cluster workflow](https://github.com/KittyChen913/gitops-demo-docs/blob/master/docs/CI%EF%BC%8FCD%20Workflow/cluster.md)。
+- destroy 流程或安全限制：更新 README、docs 站台的 [Cluster workflow](https://github.com/KittyChen913/gitops-demo-docs/blob/master/docs/CI%EF%BC%8FCD%20Workflow/cluster.md)「安全設計」與 [Cluster 常用操作](https://github.com/KittyChen913/gitops-demo-docs/blob/master/docs/Guides/cluster-operations.md)。
+- 依內容類型更新 docs 站台：manual command、health check 與 destroy 指令改 [Cluster 常用操作](https://github.com/KittyChen913/gitops-demo-docs/blob/master/docs/Guides/cluster-operations.md)；failure handling、post-provision 與 workflow 階段改 [Cluster workflow](https://github.com/KittyChen913/gitops-demo-docs/blob/master/docs/CI%EF%BC%8FCD%20Workflow/cluster.md)；GitHub Environment 設定改 [快速開始](https://github.com/KittyChen913/gitops-demo-docs/blob/master/docs/Guides/quick-start.md)。
+- `gh workflow run`、apply、health check、post-provision 與 destroy 的操作範例統一維護於 docs 站台的 [Cluster 常用操作](https://github.com/KittyChen913/gitops-demo-docs/blob/master/docs/Guides/cluster-operations.md)；README 不重複保存指令，只保留連結。
 
 ## 回覆使用者時
 

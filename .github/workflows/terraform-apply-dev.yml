@@ -56,6 +56,9 @@ on:
       - ".gitattributes"
       - ".github/workflows/**"
       - ".github/actions/**"
+      # repo 契約檔：OIDC Role 名稱、AWS region 與共用 SSM 路徑的唯一來源，
+      # 由 configure-aws-credentials／get-ssm-parameters 於執行期讀取。
+      - "config/shared.json"
       - "config/worker-firewall/dev.json"
       - "scripts/**"
       - "tests/**"

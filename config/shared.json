@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "aws": {
+    "region": "ap-southeast-1",
+    "oidc_roles": {
+      "deployment": "github-oidc-gitops-demo-cluster-role"
+    },
+    "ssm_parameter_paths": {
+      "linode_token": "/gitops/shared/LINODE_TOKEN"
+    }
+  }
+}

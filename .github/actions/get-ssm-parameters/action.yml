@@ -1,40 +1,107 @@
 name: "Get SSM Parameters"
-description: "Retrieves parameters from AWS SSM Parameter Store and sets them as environment variables"
+description: "Resolve an SSM parameter name or path and export retrieved values as masked environment variables."
 
 inputs:
+  name-selector:
+    description: "Semantic exact-name SSM selector resolved from config/shared.json (.aws.ssm_parameter_paths). Retrieved value must be single-line."
+    required: false
+    default: ""
   ssm_param_path:
-    description: "Path to the SSM Parameter Store"
-    required: true
+    description: "Explicit SSM path (recursive). Use only for runtime-derived paths."
+    required: false
+    default: ""
+  ssm_param_name:
+    description: "Explicit SSM parameter name for a single-line value. Use only for runtime-derived names."
+    required: false
+    default: ""
 
 runs:
   using: "composite"
   steps:
-    - id: get-ssm
+    - name: "Get SSM parameters"
+      id: get-ssm
       shell: bash
       env:
+        NAME_SELECTOR: ${{ inputs.name-selector }}
         SSM_PARAM_PATH: ${{ inputs.ssm_param_path }}
+        SSM_PARAM_NAME: ${{ inputs.ssm_param_name }}
       run: |
-        params=$(aws ssm get-parameters-by-path \
-          --path "${SSM_PARAM_PATH}" \
-          --recursive \
-          --with-decryption \
-          --query "Parameters[*].{Name:Name,Value:Value}" \
-          --output text)
+        set -euo pipefail
+        readonly EXPECTED_SCHEMA_VERSION=1
+
+        provided=0
+        if [[ -n "${NAME_SELECTOR}" ]]; then
+          provided=$((provided + 1))
+        fi
+        if [[ -n "${SSM_PARAM_PATH}" ]]; then
+          provided=$((provided + 1))
+        fi
+        if [[ -n "${SSM_PARAM_NAME}" ]]; then
+          provided=$((provided + 1))
+        fi
+        if [[ ${provided} -ne 1 ]]; then
+          echo "::error::Exactly one of name-selector, ssm_param_path or ssm_param_name must be provided"
+          exit 1
+        fi
+
+        resolved_name="${SSM_PARAM_NAME}"
+        if [[ -n "${NAME_SELECTOR}" ]]; then
+          config="${GITHUB_WORKSPACE}/config/shared.json"
+          if [[ ! -f "${config}" ]]; then
+            echo "::error::Repository contract file not found: config/shared.json"
+            exit 1
+          fi
+          if ! jq -e --argjson v "${EXPECTED_SCHEMA_VERSION}" '.schema_version == $v' "${config}" >/dev/null; then
+            echo "::error::config/shared.json schema_version mismatch (expected ${EXPECTED_SCHEMA_VERSION})."
+            exit 1
+          fi
+          if ! resolved_name="$(jq -re --arg k "${NAME_SELECTOR}" '.aws.ssm_parameter_paths[$k] | select(type == "string") | select(length > 1 and startswith("/"))' "${config}")"; then
+            echo "::error::SSM parameter selector '${NAME_SELECTOR}' must resolve to an absolute non-empty path in config/shared.json (.aws.ssm_parameter_paths)."
+            exit 1
+          fi
+        fi
+
+        if [[ -n "${resolved_name}" ]]; then
+          parameter_json="$(aws ssm get-parameter \
+            --name "${resolved_name}" \
+            --with-decryption \
+            --query "Parameter.Value" \
+            --output json)"
+          # 先在 JSON string 中驗證控制字元，再解碼為原始值；避免 Bash command
+          # substitution 先移除尾端換行，使非法值被靜默正規化。
+          if ! parameter_value="$(jq -er 'select(type == "string") | select((contains("\r") or contains("\n") or contains("\t")) | not)' <<< "${parameter_json}")"; then
+            echo "::error::SSM parameter value contains a carriage return, newline or tab and cannot be exported as an environment variable: ${resolved_name}"
+            exit 1
+          fi
+          params="$(printf '%s\t%s' "${resolved_name}" "${parameter_value}")"
+        else
+          params="$(aws ssm get-parameters-by-path \
+            --path "${SSM_PARAM_PATH}" \
+            --recursive \
+            --with-decryption \
+            --query "Parameters[*].{Name:Name,Value:Value}" \
+            --output text)"
+        fi
 
         param_count=0
-        while read -r name value; do
-          if [[ -n "$name" && -n "$value" ]]; then
-            var_name=$(echo "$name" | awk -F'/' '{print $NF}')
-            upper_key=$(echo "$var_name" | tr '[:lower:]-' '[:upper:]_')
-            echo "::add-mask::$value"
-            echo "Found parameter: $upper_key"
-            echo "${upper_key}=${value}" >> "$GITHUB_ENV"
+        while IFS=$'\t' read -r name value; do
+          if [[ -n "${name}" && -n "${value}" ]]; then
+            var_name="${name##*/}"
+            upper_key="$(printf '%s' "${var_name}" | tr '[:lower:]-' '[:upper:]_')"
+            if [[ ! "${upper_key}" =~ ^[A-Z_][A-Z0-9_]*$ ]]; then
+              echo "::error::SSM parameter cannot be mapped to an environment variable: ${name}"
+              exit 1
+            fi
+            echo "::add-mask::${value}"
+            echo "Found parameter: ${upper_key}"
+            echo "${upper_key}=${value}" >> "${GITHUB_ENV}"
             param_count=$((param_count + 1))
           fi
-        done <<< "$params"
+        done <<< "${params}"
 
-        if [[ $param_count -gt 0 ]]; then
-          echo "✓ Successfully retrieved $param_count SSM parameters"
+        if [[ ${param_count} -gt 0 ]]; then
+          echo "Successfully retrieved ${param_count} SSM parameter(s)"
         else
-          echo "⚠ No SSM parameters found"
+          echo "::error::No SSM parameters found"
+          exit 1
         fi
